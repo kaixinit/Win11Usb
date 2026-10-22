@@ -19,6 +19,11 @@ exit /b 0
 "@
 [IO.File]::WriteAllText($fixture,$fixtureText.Replace("`r`n","`n").Replace("`n","`r`n"),[Text.ASCIIEncoding]::new())
 $cmd=Join-Path $env:SystemRoot 'System32\cmd.exe'
+$previousInputEncoding=[Console]::InputEncoding
+try {
+# Keep this legacy cmd fixture's ASCII protocol independent of the CI console's UTF-8 BOM.
+# Process.StandardInput uses Console.InputEncoding on .NET Framework.
+[Console]::InputEncoding=[Text.UTF8Encoding]::new($false)
 Run-Command -Program $cmd -Arguments @('/d','/c',$fixture) -Title 'STDIN success fixture' -StandardInput 'Y'
 $log=Get-ChildItem -LiteralPath $script:workRoot -Filter 'cmd.exe-*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 Check ($null -ne $log) 'Absolute program path must produce a filename-only log'
@@ -37,6 +42,7 @@ Run-Command -Program $cmd -Arguments @('/d','/c',$normal) -Title 'No-STDIN fixtu
 $log=Get-ChildItem -LiteralPath $script:workRoot -Filter 'cmd.exe-*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $text=[IO.File]::ReadAllText($log.FullName)
 Check ($text -match 'NormalNoInput' -and $text -match 'ExitCode: 0') 'Ordinary native invocation must continue to work'
+} finally { [Console]::InputEncoding=$previousInputEncoding }
 Write-Host 'PASS: Windows PowerShell native input success/failure, absolute program paths, EOF partial line, no-input invocation.'
 $toolRoot=Join-Path $PSScriptRoot ('artifacts/payload-' + [guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $toolRoot
