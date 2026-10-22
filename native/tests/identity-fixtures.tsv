@@ -1,0 +1,39 @@
+Windows 10 Enterprise LTSC 2019		EnterpriseS	17763	cn_windows_10_enterprise_ltsc_2019_x64_dvd_9c09ff24.iso	WIN10LTSC	2019			
+Windows 10 Enterprise LTSC 2021		EnterpriseS	19041	zh-cn_windows_10_enterprise_ltsc_2021_x64_dvd_033b7312.iso	WIN10LTSC	2021			
+Windows 10 Enterprise LTSC 2021		EnterpriseS	19044	zh-cn_windows_10_enterprise_ltsc_2021_x64_dvd_033b7312.iso	WIN10LTSC	2021			
+Windows 11 Enterprise LTSC 2024		EnterpriseS	26100	zh-cn_windows_11_enterprise_ltsc_2024_x64_dvd_cff9cd2d.iso	WIN11LTSC	2024			
+Windows 10 Education		Education	19041	zh-cn_windows_10_business_editions_version_22h2_updated_oct_2025_x64_dvd.iso	WIN10_22H2	22H2			
+Windows 10 Education		Education	19045	zh-cn_windows_10_business_editions_version_22h2_updated_sep_2025_x64_dvd.iso	WIN10_22H2	22H2			
+Windows 11 Education		Education	26100	zh-cn_windows_11_business_editions_version_24h2_updated_nov_2025_x64_dvd_2f40d7fb.iso	WIN11_24H2	24H2			
+Windows 11 Education		Education	26100	zh-cn_windows_11_business_editions_version_25h2_x64_dvd_22759158.iso	WIN11_25H2	25H2			
+Windows 11 Education		Education	26200	zh-cn_windows_11_business_editions_version_25h2_x64_dvd_22759158.iso	WIN11_25H2	25H2			
+Windows 11 Education		Education	26300	zh-cn_windows_11_business_editions_version_26h2_x64_dvd_74d48a06.iso	WIN11_26H2	26H2			
+Windows 10 Enterprise		EnterpriseS	17763		WIN10LTSC	2019			
+Windows 10 Enterprise		EnterpriseSN	19041		WIN10LTSC	2021			
+Windows 11 IoT Enterprise		IoTEnterpriseS	26100		WIN11LTSC	2024			
+Windows 10 Education		Education	19045		WIN10_22H2	22H2			
+Windows 11 Education		Education	26200		WIN11_25H2	25H2			
+Windows 11 Education		Education	26300		WIN11_26H2	26H2			
+Windows 11 Education		Education	28000	windows_11_version_26h1.iso	WIN11_26H1	26H1			
+Windows 10 Education		Education	19041		WIN10				
+Windows 11 Education		Education	26100		WIN11				
+Windows 11 Education		Education	22621		WIN11				
+Windows 11 Education 25H2		Education	26100		WIN11_25H2	25H2			
+Windows 11 Education	Version 24H2	Education	26100		WIN11_24H2	24H2			
+Windows 10 Enterprise	Enterprise LTSC 2021	EnterpriseS	19041		WIN10LTSC	2021			
+Windows 11 Education		Education	26100	windows_11_26h2.iso	WIN11		Conflict		
+Windows 10 Enterprise LTSC 2021		EnterpriseS	17763		WIN10LTSC		Conflict		
+Windows 10 Enterprise LTSC 2019		EnterpriseS	17763	windows_10_enterprise_ltsc_2021.iso	WIN10LTSC		Conflict		
+Windows 10 Education		Education	19045	windows_11_25h2.iso	WIN10		Conflict		
+Windows 11 Education		Education	26200	windows_11_24h2.iso	WIN11		Conflict		
+Windows 10 Education		Education	19045	windows_10_21h2.iso	WIN10		Conflict		
+Windows 11 Education		Education	26300	windows_11_25h2.iso	WIN11		Conflict		
+Windows 10 Education		Education	19045	windows_10_enterprise_ltsc_2021.iso	WIN10		Conflict		
+Windows 11 Enterprise LTSC 2024		EnterpriseS	26100	windows_11_24h2.iso	WIN11LTSC		Conflict		
+Windows 11 Education		Education	26100	windows_11_24h2_25h2.iso	WIN11		Conflict		
+Windows 11 Education		Education	26100	windows_10_windows_11_24h2.iso	WIN11		Conflict		
+Windows 11 Education		Education	27000	windows_11_27h2.iso	WIN11		Conflict		
+Windows 11 Education		Education	26100	D:\windows_11_25h2\backup.iso	WIN11				
+Windows Server 2025 Standard		ServerStandard	26100	windows_11_24h2.iso	WINSERVER			Server	ServerNT
+Windows 10 Enterprise		EnterpriseS	19041	windows_10_business_editions_version_22h2.iso	WIN10LTSC		Conflict		
+Windows 10 Enterprise		EnterpriseS	19041	windows_10_enterprise_ltsc2021.iso	WIN10LTSC	2021			

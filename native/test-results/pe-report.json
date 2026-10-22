@@ -1,0 +1,54 @@
+[
+  {
+    "name": "Win11Usb-NativeReadOnly-v0.2.0-preview.1.exe",
+    "bytes": 1747968,
+    "sha256": "63C86203B62ECF12B9EC969900B4D9C8F90A2E6A7011905C6BEAF9DD33562699",
+    "architecture": "x64",
+    "clr_header_rva": 0,
+    "clr_header_size": 0,
+    "imports": [
+      "COMCTL32.dll",
+      "comdlg32.dll",
+      "GDI32.dll",
+      "USER32.dll",
+      "SHELL32.dll",
+      "ole32.dll",
+      "ADVAPI32.dll",
+      "SETUPAPI.dll",
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ]
+  },
+  {
+    "name": "Win11Usb-NativeReview-v0.2.0-preview.1.exe",
+    "bytes": 2733056,
+    "sha256": "A556F38D26E605480FFC634257F45F15EF893D53F3554DCB761441E30A56A9AE",
+    "architecture": "x64",
+    "clr_header_rva": 0,
+    "clr_header_size": 0,
+    "imports": [
+      "COMCTL32.dll",
+      "comdlg32.dll",
+      "GDI32.dll",
+      "USER32.dll",
+      "SHELL32.dll",
+      "ole32.dll",
+      "ADVAPI32.dll",
+      "SETUPAPI.dll",
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ]
+  },
+  {
+    "name": "fat32format-x64.exe",
+    "bytes": 201728,
+    "sha256": "BF63EE484C78D157E439B9FAB126F64DE2D2C703A015EF5D31CC029AA1DA26DA",
+    "architecture": "x64",
+    "clr_header_rva": 0,
+    "clr_header_size": 0,
+    "imports": [
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ]
+  }
+]

@@ -1,0 +1,27 @@
+fat32format x64 helper for Win11Usb native review
+
+Original: fat32format by Tom Thornhill / Ridgecrop Consultants Ltd.
+License: GNU General Public License. The vendor source does not specify a
+version. GPL version 2 text is supplied (COPYING.GPL-2.0.txt); Win11Usb changes
+are licensed under GPL version 2 or later.
+Original source archive: third_party/fat32format/fat32formatsrc-vendor.zip.
+
+Modified by Win11Usb contributors on 2026-10-22:
+- x64 build, no dependency on WOW64 or a managed runtime.
+- accepts only an explicitly confirmed volume GUID plus disk/offset/length/sector.
+- independently verifies that volume's physical extent before any write.
+- removes the original drive-letter command interface and interactive prompt.
+- checks partial writes, flushes output, fixes error exit and allocation handling.
+
+This GPL program runs as a separate process. It is not linked into the MIT
+application. Its executable, complete modified C source, original source ZIP,
+license, and this notice are embedded as resources in the single distributable
+EXE and extracted into the current task directory before use.
+
+Build from the repository root, using llvm-mingw 20261020 msvcrt x86_64:
+  native\build.cmd "C:\path\to\llvm-mingw\bin" full
+Equivalent helper-only command:
+  x86_64-w64-mingw32-clang.exe -O2 -static native/third_party/fat32format.c -o native/out/fat32format-x64.exe
+
+No warranty. Back up data before formatting. The helper itself does not choose
+devices, elevate, download code, modify security settings, or start a shell.

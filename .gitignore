@@ -3,6 +3,7 @@
 /dist/
 /release/
 /tests/artifacts/
+/native/out/
 *.log
 *.user
 Thumbs.db

@@ -1,0 +1,5 @@
+# Empty trailing TSV fields are intentional; retain upstream source/license text.
+tests/*.tsv text eol=lf -whitespace
+third_party/fat32format.c text eol=lf -whitespace
+third_party/RUNTIME-LICENSES.txt text eol=lf -whitespace
+*.cmd text eol=crlf
