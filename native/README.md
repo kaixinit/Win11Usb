@@ -2,7 +2,7 @@
 
 目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.2`，**尚未完成真实 USB 写盘、UEFI 启动和精简 Windows 的验收，不应替换正式下载。**
 
-preview.2 修正 USB 下拉列表展开高度、部分驱动返回的可变长度数据，以及 USB 桥接设备识别；只读列表保留查询不完整的 USB，并提供“导出诊断”。本机已通过 186 项自动断言和文件扫描，目标电脑的实际 USB 识别仍需复测，详见 [本次修正与验证记录](USB-DETECTION-preview2.md)。[BUILD-REPORT.md](BUILD-REPORT.md) 保留 preview.1 的历史构建记录。
+preview.2 修正 USB 下拉列表展开高度、部分驱动返回的可变长度数据，以及 USB 桥接设备识别；只读列表保留查询不完整的 USB，并提供“导出诊断”。本机已通过 186 项自动断言和文件扫描，用户实机反馈已能展开并选择两支 USB；完整写盘流程仍待验收，详见 [本次修正与验证记录](USB-DETECTION-preview2.md)。[BUILD-REPORT.md](BUILD-REPORT.md) 保留 preview.1 的历史构建记录。
 
 ## 两个单文件 EXE
 
