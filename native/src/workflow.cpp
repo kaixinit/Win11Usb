@@ -3,6 +3,10 @@
 
 namespace wu {
 Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atomic<bool> &stop) {
+    struct FinishTask {
+        Backend &backend;
+        ~FinishTask() { backend.Finish(); }
+    } finish{backend};
     Result result;
     Prepared p;
     auto log = [&](const std::wstring &s) {

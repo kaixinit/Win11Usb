@@ -460,13 +460,7 @@ class NativeBackend final : public Backend {
         commands.Run(SystemFile(L"dism.exe"), args, p.work, p.work + L"\\dism-split.log", h, stop);
         auto files = ListFiles(p.staging + L"\\", stop);
         CheckSwm(files);
-        for (const auto &f : files) {
-            Handle pin(CreateFileW(f.full.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                   FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-            if (!pin.valid())
-                throw Error(L"不能固定本次 SWM 文件身份：" + WinError());
-            splitPins.push_back(std::move(pin));
-        }
+        splitPins = PinFilesReadOnly(files);
         CheckSplitParts(files, stop);
         return files;
     }
@@ -503,6 +497,7 @@ class NativeBackend final : public Backend {
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
         if (!h.valid() || !FlushFileBuffers(h))
             throw Error(L"目标卷写入缓存刷新失败：" + WinError());
+        h.reset(); // No target volume handle crosses into final identity checks or cleanup.
         TargetVolume(r);
         splitPins.clear();
     }
@@ -549,6 +544,16 @@ class NativeBackend final : public Backend {
             } catch (...) {
             }
         }
+    }
+    void Finish() noexcept override {
+        // The UI may still own this backend after RunWorkflow returns. Release our
+        // file/directory pins now, rather than waiting for WM_FINISHED/destruction.
+        // Do not detach here: the user's successful "keep ISO mounted" choice stands.
+        splitPins.clear();
+        helperPin.reset();
+        sourceFile.reset();
+        iso.reset();
+        workspace.reset();
     }
 };
 } // namespace

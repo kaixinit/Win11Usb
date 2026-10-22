@@ -195,6 +195,8 @@ class Backend {
     virtual void EjectUsb(const Request &, const std::wstring &) = 0;
     virtual void EjectIso() = 0;
     virtual void Abort(bool forced) noexcept = 0;
+    // Called only by the worker, before reporting completion on every exit path.
+    virtual void Finish() noexcept {}
 };
 Result RunWorkflow(const Request &, Backend &, const Hooks &, std::atomic<bool> &);
 std::unique_ptr<Backend> CreateNativeBackend();

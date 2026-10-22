@@ -1,6 +1,8 @@
 # Win11Usb C++ / Win32 原生迁移验证版
 
-目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.8`，**尚未完成真实 USB 写盘、UEFI 启动和精简 Windows 的验收，不应替换正式下载。**
+目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.9`，**尚未完成真实 USB 写盘、UEFI 启动和精简 Windows 的验收，不应替换正式下载。**
+
+preview.9 专项检查格式化、拆分、复制、校验与清理之间的句柄交接。命令执行器在所有退出路径关闭 Job，并核验主进程、已记录的后代进程和 Job 活动计数；复制回调异常改为让 CopyFileEx 先取消收尾，再报告错误；任务返回前统一释放应用持有的文件和目录引用。744 项断言通过（596 项主程序 + 148 项普通文件 FAT32 工具测试），新增真实独占文件、SWM 清理与重复失败无句柄增长检查。具体范围及实机限制见 [句柄生命周期检查报告](HANDLE-REVIEW-preview9.md)。
 
 preview.8 修正 FAT32 工具打开卷时的错误 32：按 Windows 接口要求使用读/写共享打开，再锁卷取得独占访问；只对写入前的临时占用有限等待，持续失败不写入 FAT32。569 项主测试断言通过，新增真实普通文件共享冲突复现、锁定失败及原样保留测试，范围见 [卷打开修正报告](VOLUME-OPEN-preview8.md)。真实 USB 格式化仍待复测。
 
@@ -14,8 +16,8 @@ preview.5 的任务目录、DISM scratch、持续日志、SWM 清理和新分区
 
 | 文件 | 用途 |
 | --- | --- |
-| `Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
-| `Win11Usb-NativeReview-v0.2.0-preview.8.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
+| `Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
+| `Win11Usb-NativeReview-v0.2.0-preview.9.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
 
 两者均使用原生 x64 PE、系统 MSVCRT 和静态 C++ 运行库，没有 CLR 头或托管程序集。无需额外安装 .NET、VC++ Redistributable、PowerShell 或 WebView。单文件指分发时一个 EXE；制作时仍会在本机创建日志、临时 SWM，并提取独立 FAT32 工具和对应源码/许可。
 
@@ -57,12 +59,12 @@ native\out\Win11Usb-NativeTests.exe native\tests\identity-fixtures.tsv work\nati
 ## 只读诊断与界面预览
 
 ```bat
-Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe --list-disks disks.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe --dependency-report dependencies.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe --preview
-Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe --preview-blocked
-Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe --preview-running
-Win11Usb-NativeReadOnly-v0.2.0-preview.8.exe --preview-dialog
+Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe --list-disks disks.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe --dependency-report dependencies.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe --preview
+Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe --preview-blocked
+Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe --preview-running
+Win11Usb-NativeReadOnly-v0.2.0-preview.9.exe --preview-dialog
 ```
 
 `--preview*` 使用明确标注的示例数据，不是制作结果。弹窗预览点击“预览制作状态”打开，不会执行格式化。系统菜单提供“关于 Win11Usb / 许可证”。JSON 诊断不输出设备原始序列号或 PnP 标识。

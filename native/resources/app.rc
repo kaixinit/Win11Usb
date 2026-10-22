@@ -13,8 +13,8 @@
 205 RCDATA "../../third_party/fat32format/fat32formatsrc-vendor.zip"
 #endif
 1 VERSIONINFO
-FILEVERSION 0,2,0,8
-PRODUCTVERSION 0,2,0,8
+FILEVERSION 0,2,0,9
+PRODUCTVERSION 0,2,0,9
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -22,8 +22,8 @@ BEGIN
  VALUE "CompanyName", "Win11Usb contributors\0"
  VALUE "FileDescription", "Win11Usb C++ Win32 native review\0"
  VALUE "ProductName", "Win11Usb\0"
- VALUE "ProductVersion", "0.2.0-preview.8\0"
- VALUE "FileVersion", "0.2.0.8\0"
+ VALUE "ProductVersion", "0.2.0-preview.9\0"
+ VALUE "FileVersion", "0.2.0.9\0"
  END END
  BLOCK "VarFileInfo" BEGIN VALUE "Translation", 0x409,1200 END
 END

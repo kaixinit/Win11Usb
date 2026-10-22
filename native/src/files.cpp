@@ -1,6 +1,7 @@
 #include "platform.hpp"
 #include <algorithm>
 #include <cstring>
+#include <exception>
 
 namespace wu {
 uint64_t ManifestBytes(const std::vector<File> &files) {
@@ -148,28 +149,43 @@ struct CopyProgress {
     std::atomic<bool> *stop;
     uint64_t done, total, start, last = 0;
     std::wstring name;
+    std::exception_ptr failure;
 };
 DWORD CALLBACK CopyCallback(LARGE_INTEGER size, LARGE_INTEGER copied, LARGE_INTEGER, LARGE_INTEGER, DWORD,
                             DWORD, HANDLE, HANDLE, LPVOID value) {
     auto p = (CopyProgress *)value;
-    if (*p->stop)
-        return PROGRESS_CANCEL;
-    auto now = GetTickCount64();
-    if (now - p->last < 100 && copied.QuadPart != size.QuadPart)
+    try {
+        if (*p->stop)
+            return PROGRESS_CANCEL;
+        auto now = GetTickCount64();
+        if (now - p->last < 100 && copied.QuadPart != size.QuadPart)
+            return PROGRESS_CONTINUE;
+        p->last = now;
+        if (p->hooks->progress)
+            (*p->hooks).progress({4, 100.0 * (p->done + copied.QuadPart) / std::max<uint64_t>(1, p->total),
+                                  100.0 * copied.QuadPart / std::max<LONGLONG>(1, size.QuadPart),
+                                  L"正在复制安装文件", p->name, (now - p->start) / 1000});
         return PROGRESS_CONTINUE;
-    p->last = now;
-    if (p->hooks->progress)
-        (*p->hooks).progress({4, 100.0 * (p->done + copied.QuadPart) / std::max<uint64_t>(1, p->total),
-                              100.0 * copied.QuadPart / std::max<LONGLONG>(1, size.QuadPart),
-                              L"正在复制安装文件", p->name, (now - p->start) / 1000});
-    return PROGRESS_CONTINUE;
+    } catch (...) {
+        // Never unwind C++ exceptions through CopyFileEx's system frames. Let it
+        // cancel and close its source/destination handles before reporting failure.
+        p->failure = std::current_exception();
+        return PROGRESS_CANCEL;
+    }
 }
 } // namespace
+std::vector<Handle> PinFilesReadOnly(const std::vector<File> &files) {
+    ManifestBytes(files);
+    std::vector<Handle> pins;
+    for (const auto &file : files)
+        pins.push_back(ReadPinned(file.full, file.size));
+    return pins;
+}
 void CopyFilesNative(const std::vector<File> &files, const std::wstring &target, const Hooks &h,
                      std::atomic<bool> &stop) {
     if (target.empty() || target.back() != L'\\')
         throw Error(L"复制目标根路径无效。");
-    CopyProgress p{&h, &stop, 0, 0, GetTickCount64(), 0, L""};
+    CopyProgress p{&h, &stop, 0, 0, GetTickCount64(), 0, L"", {}};
     p.total = ManifestBytes(files);
     for (auto &f : files) {
         CheckCancel(stop);
@@ -182,8 +198,11 @@ void CopyFilesNative(const std::vector<File> &files, const std::wstring &target,
         BOOL cancelled = FALSE;
         if (h.log)
             h.log(L"复制：" + f.relative + L" · " + FormatSize(f.size));
-        if (!CopyFileExW(f.full.c_str(), dest.c_str(), CopyCallback, &p, &cancelled,
-                         COPY_FILE_FAIL_IF_EXISTS)) {
+        BOOL copied =
+            CopyFileExW(f.full.c_str(), dest.c_str(), CopyCallback, &p, &cancelled, COPY_FILE_FAIL_IF_EXISTS);
+        if (p.failure)
+            std::rethrow_exception(p.failure);
+        if (!copied) {
             if (stop)
                 throw Cancelled();
             throw Error(L"复制失败：" + f.relative + L"\r\n" + WinError());

@@ -43,6 +43,9 @@ using CloseWim = BOOL(WINAPI *)(HANDLE);
 struct WimHandle {
     HANDLE value;
     CloseWim close;
+    WimHandle(HANDLE value, CloseWim close) : value(value), close(close) {}
+    WimHandle(const WimHandle &) = delete;
+    WimHandle &operator=(const WimHandle &) = delete;
     ~WimHandle() {
         if (value && value != INVALID_HANDLE_VALUE)
             close(value);
@@ -112,17 +115,20 @@ ImageIdentity ReadWimIdentity(const std::wstring &image, const std::wstring &iso
     DWORD length = 0;
     BOOL ok = info(index.value, &buffer, &length);
     DWORD e = GetLastError();
+    struct FreeXml {
+        PVOID buffer;
+        ~FreeXml() {
+            if (buffer)
+                LocalFree(buffer);
+        }
+    } xmlMemory{buffer};
     if (!ok || !buffer || length < 4 || length % sizeof(wchar_t)) {
-        if (buffer)
-            LocalFree(buffer);
         throw Error(L"无法读取映像元数据：" + WinError(e));
     }
     if (length > 16 * 1024 * 1024) {
-        LocalFree(buffer);
         throw Error(L"映像元数据异常过大。");
     }
     std::wstring xml((const wchar_t *)buffer, length / sizeof(wchar_t));
-    LocalFree(buffer);
     return ParseWimXml(xml, iso);
 }
 ImageIdentity ReadTaskWimIdentity(const std::wstring &image, const std::wstring &iso,

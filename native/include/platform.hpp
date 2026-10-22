@@ -87,6 +87,8 @@ void CopyFilesNative(const std::vector<File> &files, const std::wstring &target,
 void VerifyFilesNative(const std::vector<File> &files, const std::wstring &target, std::atomic<bool> &stop,
                        const Hooks &hooks = {});
 void CheckSplitParts(const std::vector<File> &files, std::atomic<bool> &stop);
+// Pin the complete set atomically; failure closes every earlier file in the set.
+std::vector<Handle> PinFilesReadOnly(const std::vector<File> &files);
 std::vector<File> InstallationFiles(const Prepared &prepared, const std::vector<File> &swm);
 std::wstring QuoteArg(const std::wstring &arg);
 class CommandRunner {

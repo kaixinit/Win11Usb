@@ -13,6 +13,17 @@ void Require(bool value, const char *message) {
     if (!value)
         throw std::runtime_error(message);
 }
+void ReleasedFile(const std::wstring &path, const char *message) {
+    Handle file(CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE | DELETE, 0, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    Require(file.valid(), message);
+}
+DWORD HandleCount() {
+    DWORD count = 0;
+    if (!GetProcessHandleCount(GetCurrentProcess(), &count))
+        throw Error(WinError());
+    return count;
+}
 template <class F> void Reject(F f, const char *msg) {
     bool failed = false;
     try {
@@ -96,6 +107,7 @@ struct Fake final : Backend {
     void EjectUsb(const Request &, const std::wstring &) override { Call(L"eject-usb"); }
     void EjectIso() override { Call(L"eject-iso"); }
     void Abort(bool) noexcept override { calls.push_back(L"abort"); }
+    void Finish() noexcept override { calls.push_back(L"finish"); }
     bool Has(const wchar_t *s) { return std::find(calls.begin(), calls.end(), s) != calls.end(); }
 };
 void IdentityTests(const std::wstring &fixtures) {
@@ -263,6 +275,28 @@ void WorkflowTests() {
     }
     std::cout << "PASS full FAT32/NTFS state machine, prompts and injected failures\n";
 }
+void FinishTests() {
+    for (auto failure : {L"", L"prepare", L"validate-original", L"format", L"split", L"copy", L"verify",
+                         L"cleanup", L"eject-usb", L"eject-iso"}) {
+        Fake fake;
+        fake.fail = failure;
+        Hooks hooks;
+        hooks.ask = [](Prompt, const std::wstring &) { return true; };
+        std::atomic<bool> stop = false;
+        RunWorkflow(TestRequest(), fake, hooks, stop);
+        Require(fake.calls.back() == L"finish" &&
+                    std::count(fake.calls.begin(), fake.calls.end(), L"finish") == 1,
+                "all six-stage success and error paths finalize exactly once before returning");
+    }
+    Fake fake;
+    std::atomic<bool> stop = false;
+    Hooks hooks;
+    hooks.log = [](const std::wstring &) { throw Error(L"injected reporting failure"); };
+    Reject([&] { RunWorkflow(TestRequest(), fake, hooks, stop); }, "unexpected reporting exception escapes");
+    Require(fake.calls.back() == L"finish" &&
+                std::count(fake.calls.begin(), fake.calls.end(), L"finish") == 1,
+            "scope guard finalizes even when error reporting itself throws");
+}
 void FileTests(const std::wstring &root) {
     std::atomic<bool> stop = false;
     MakeDirectory(root + L"\\source\\目录");
@@ -276,6 +310,11 @@ void FileTests(const std::wstring &root) {
     h.progress = [&](const Progress &) { progress++; };
     CopyFilesNative(files, root + L"\\target\\", h, stop);
     VerifyFilesNative(files, root + L"\\target\\", stop);
+    for (const auto &file : files) {
+        ReleasedFile(file.full, "source handles released after successful copy and verify");
+        ReleasedFile(root + L"\\target\\" + file.relative,
+                     "target handles released after successful copy and verify");
+    }
     Require(progress > 0, "actual CopyFileEx reports progress");
     Require(Read(root + L"\\target\\目录\\中文 文件.txt") == L"native UTF-8 file\r\n",
             "actual Unicode file copied");
@@ -295,6 +334,8 @@ void FileTests(const std::wstring &root) {
     WriteUtf8(root + L"\\target\\boot.bin", corrupt);
     Reject([&] { VerifyFilesNative(files, root + L"\\target\\", stop); },
            "same-length content corruption is rejected by actual readback");
+    ReleasedFile(root + L"\\source\\boot.bin", "corrupt verification releases source handle");
+    ReleasedFile(root + L"\\target\\boot.bin", "corrupt verification releases target handle");
     WriteUtf8(root + L"\\target\\boot.bin", std::wstring(128 * 1024, L'B'));
     int pinned = 0, verifiedProgress = 0;
     Hooks verify;
@@ -311,11 +352,78 @@ void FileTests(const std::wstring &root) {
     VerifyFilesNative(files, root + L"\\target\\", stop, verify);
     Require(pinned >= 1 && verifiedProgress >= 2,
             "content verification pins open files against writes and reports stage-five progress");
+    Hooks cancelRead;
+    cancelRead.progress = [&](const Progress &) { stop = true; };
+    Reject([&] { VerifyFilesNative(files, root + L"\\target\\", stop, cancelRead); },
+           "cancel real content verification while file handles are open");
+    ReleasedFile(root + L"\\source\\boot.bin", "cancelled verification releases source handle");
+    ReleasedFile(root + L"\\target\\boot.bin", "cancelled verification releases target handle");
+    stop = false;
+    Hooks cancelCopy;
+    cancelCopy.progress = [&](const Progress &) { stop = true; };
+    auto cancelledTarget = root + L"\\cancel-copy\\";
+    Reject([&] { CopyFilesNative(files, cancelledTarget, cancelCopy, stop); },
+           "cancel real CopyFileEx while copying");
+    for (const auto &file : files)
+        ReleasedFile(file.full, "cancelled CopyFileEx releases source pins");
+    stop = false;
+    for (const auto &file : ListFiles(cancelledTarget, stop))
+        ReleasedFile(file.full, "cancelled CopyFileEx leaves no held target file handle");
+    Hooks brokenProgress;
+    brokenProgress.progress = [](const Progress &) { throw Error(L"injected copy progress failure"); };
+    auto failedTarget = root + L"\\callback-copy\\";
+    Reject([&] { CopyFilesNative(files, failedTarget, brokenProgress, stop); },
+           "CopyFileEx callback exception is reported only after native copy returns");
+    for (const auto &file : files)
+        ReleasedFile(file.full, "copy callback exception releases every source pin");
+    for (const auto &file : ListFiles(failedTarget, stop))
+        ReleasedFile(file.full, "copy callback exception releases every remaining target handle");
+    auto copyHandles = HandleCount();
+    for (int i = 0; i < 6; ++i) {
+        Reject([&] { CopyFilesNative(files, failedTarget, brokenProgress, stop); },
+               "repeated failed copy releases CopyFileEx-owned handles");
+    }
+    Require(HandleCount() == copyHandles, "copy callback failures leave no process handle growth");
     WriteUtf8(root + L"\\target\\boot.bin", L"corrupt length");
     Reject([&] { VerifyFilesNative(files, root + L"\\target\\", stop); }, "actual truncated target rejected");
     stop = true;
     Reject([&] { ListFiles(root + L"\\source\\", stop); }, "native file enumerate honors cancellation");
     std::cout << "PASS actual native file copy, Unicode paths, size verification, cancellation\n";
+}
+void PinReleaseTests(const std::wstring &root) {
+    Disk outside;
+    outside.number = MAXDWORD;
+    auto base = root + L"\\pin-lifecycle";
+    MakeDirectory(base);
+    TaskWorkspace workspace(base, outside);
+    auto staging = workspace.Directory(L"staging");
+    WriteUtf8(staging + L"\\install.swm", L"part one");
+    WriteUtf8(staging + L"\\install2.swm", L"part two");
+    std::atomic<bool> stop = false;
+    auto files = ListFiles(staging + L"\\", stop);
+    auto pins = PinFilesReadOnly(files);
+    Require(!DeleteFileW(files[0].full.c_str()) && GetLastError() == ERROR_SHARING_VIOLATION,
+            "production SWM pins prevent deletion until verification releases them");
+    Reject([&] { workspace.CleanupSwm(files); }, "cleanup cannot delete files with active SWM pins");
+    pins.clear();
+    for (const auto &file : files)
+        ReleasedFile(file.full, "clearing SWM pins immediately permits exclusive access");
+    auto incomplete = files;
+    incomplete[1].full = staging + L"\\missing.swm";
+    // Warm Windows error-message resources before measuring repeated operations.
+    Reject([&] { PinFilesReadOnly(incomplete); }, "warm partial pin failure path");
+    auto before = HandleCount();
+    for (int i = 0; i < 12; ++i) {
+        Reject([&] { PinFilesReadOnly(incomplete); }, "partial pin failure closes preceding SWM handle");
+        ReleasedFile(files[0].full, "partial pin acquisition does not retain its first file");
+    }
+    auto after = HandleCount();
+    std::cout << "SWM pin handles before=" << before << " after=" << after << '\n';
+    Require(after == before, "repeated partial SWM pin failures do not leak handles");
+    workspace.CleanupSwm(files);
+    Require(!FileExists(files[0].full) && !FileExists(files[1].full),
+            "actual SWM deletion completes after shared production pins are released");
+    std::cout << "PASS actual SWM pin lifetime, failed acquisition rollback and cleanup handoff\n";
 }
 void StorageCompatibilityTests() {
     Require(IsUsbStorage(BusTypeUsb, {}), "reported USB bus accepted");
@@ -1198,10 +1306,12 @@ void WorkspaceTests(const std::wstring &root) {
         << "PASS actual task directory pins, DISM scratch, strict SWM cleanup and partition readiness\n";
 }
 struct FileWorkflow final : Backend {
-    std::wstring base, source, output;
+    std::wstring base, source, output, work;
     bool split, formatted = false, copied = false, ejected = false, failPreflight = false;
     std::wstring fault;
     std::unique_ptr<TaskWorkspace> task;
+    std::vector<Handle> pins;
+    bool finished = false;
     FileWorkflow(std::wstring b, std::wstring s, bool split)
         : base(std::move(b)), source(std::move(s)), split(split) {
         output = base + L"\\output\\";
@@ -1210,6 +1320,7 @@ struct FileWorkflow final : Backend {
         task = TaskWorkspace::Create(base, r.disk);
         Prepared p;
         p.work = task->Root();
+        work = p.work;
         if (h.workReady)
             h.workReady(p.work);
         p.staging = task->Directory(L"staging");
@@ -1247,6 +1358,7 @@ struct FileWorkflow final : Backend {
         if (fault == L"missing-last")
             swm.pop_back();
         CheckSwm(swm);
+        pins = PinFilesReadOnly(swm);
         CheckSplitParts(swm, stop);
         return swm;
     }
@@ -1260,11 +1372,20 @@ struct FileWorkflow final : Backend {
     void Verify(const Request &, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
                 const Hooks &h, std::atomic<bool> &stop) override {
         VerifyFilesNative(InstallationFiles(p, swm), output, stop, h);
+        pins.clear();
     }
     void Cleanup(const Prepared &, const std::vector<File> &swm) override { task->CleanupSwm(swm); }
     void EjectUsb(const Request &, const std::wstring &) override { ejected = true; }
     void EjectIso() override {}
-    void Abort(bool) noexcept override {}
+    void Abort(bool forced) noexcept override {
+        if (!forced)
+            pins.clear();
+    }
+    void Finish() noexcept override {
+        pins.clear();
+        task.reset();
+        finished = true;
+    }
 };
 void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
     for (auto fs : {L"FAT32", L"NTFS"})
@@ -1294,8 +1415,15 @@ void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
                         FileExists(backend.output + L"sources\\install.swm") == split,
                     "shared production copy set replaces WIM only for split branch on FAT32 and NTFS");
             std::atomic<bool> scan = false;
-            Require(ListFiles(backend.task->Directory(L"staging") + L"\\", scan).empty(),
+            Require(ListFiles(backend.work + L"\\staging\\", scan).empty(),
                     "post-copy cleanup clears own SWM while copied installation files remain");
+            Require(backend.finished && !backend.task && backend.pins.empty(),
+                    "success releases workspace and SWM pins before backend destruction");
+            for (auto &file : ListFiles(backend.output, scan))
+                ReleasedFile(file.full, "completed file pipeline leaves no output file handle open");
+            Require(MoveFileW(backend.work.c_str(), (backend.work + L"-moved").c_str()) &&
+                        MoveFileW((backend.work + L"-moved").c_str(), backend.work.c_str()),
+                    "success releases directory pins while backend remains alive");
         }
     for (auto fs : {L"FAT32", L"NTFS"})
         for (auto fault :
@@ -1320,8 +1448,15 @@ void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
             Require(!result.copied && !backend.ejected && !result.error.empty(),
                     "actual file pipeline failures and cancellation never report success or eject");
             std::atomic<bool> scan = false;
-            Require(ListFiles(backend.task->Directory(L"staging") + L"\\", scan).size() == 2,
-                    "failed split/copy/verify preserves staged SWMs for diagnosis");
+            auto retained = ListFiles(backend.work + L"\\staging\\", scan);
+            Require(retained.size() == 2, "failed split/copy/verify preserves staged SWMs for diagnosis");
+            Require(backend.finished && !backend.task && backend.pins.empty(),
+                    "failure and cancellation release task handles before backend destruction");
+            for (const auto &file : retained)
+                ReleasedFile(file.full, "failed file pipeline retains SWMs without locking them");
+            if (backend.formatted)
+                for (const auto &file : ListFiles(backend.output, scan))
+                    ReleasedFile(file.full, "failed pipeline releases all copied target file handles");
             if (backend.fault == L"oversize-swm" || backend.fault == L"missing-last")
                 Require(!backend.copied, "malformed split set stops before copying any installation files");
             if (backend.fault == L"corrupt-copy")
@@ -1441,11 +1576,78 @@ void ProcessTests(const std::wstring &root) {
         [&] { run.Run(ExePath(), {L"--child-noisy"}, root, root + L"\\noisy-timeout.log", {}, stop, 200); },
         "continuous command output still enforces timeout");
     Require(GetTickCount64() - tick < 5000, "busy output cannot starve command timeout checks");
+    auto before = HandleCount();
+    for (const auto &mode : {L"success", L"failure", L"timeout", L"cancel", L"log-error"}) {
+        auto path = root + L"\\held-" + mode;
+        auto report = path + L".pid", log = path + L".log";
+        stop = false;
+        Hooks hook;
+        hook.log = [&](const std::wstring &s) {
+            if (s != L"holder ready")
+                return;
+            if (std::wstring(mode) == L"cancel")
+                stop = true;
+            if (std::wstring(mode) == L"log-error")
+                throw Error(L"injected log callback failure");
+        };
+        auto invoke = [&] {
+            run.Run(ExePath(), {L"--child-lock-tree", path, report, mode}, root, log, hook, stop,
+                    std::wstring(mode) == L"timeout" ? 1200 : 10000);
+        };
+        if (std::wstring(mode) == L"success")
+            invoke();
+        else
+            Reject(invoke, "held descendant file is released on command failure, timeout or cancellation");
+        Require(FileExists(report), "descendant really acquired its exclusive file before test exit");
+        ReleasedFile(path, "command returns only after tested descendant releases its exclusive file");
+        ReleasedFile(log, "command log handle closed before returning or throwing");
+        DWORD pid = (DWORD)std::stoul(Read(report));
+        Handle descendant(OpenProcess(SYNCHRONIZE, FALSE, pid));
+        Require(!descendant.valid() || WaitForSingleObject(descendant, 0) == WAIT_OBJECT_0,
+                "observed descendant is already terminated at command return");
+    }
+    Require(HandleCount() == before, "same runner retains no job, process, pipe or log handles after errors");
+    stop = false;
+    for (int i = 0; i < 8; ++i)
+        Reject([&] { run.Run(ExePath(), {L"--child-fail"}, root, L"", {}, stop, 10000); },
+               "repeat failed command on live runner");
+    Require(HandleCount() == before, "repeated nonzero commands leave handle count unchanged");
     std::cout << "PASS actual native process argv, timeout and owned-job cancellation\n";
 }
 } // namespace
 int wmain(int argc, wchar_t **argv) {
     try {
+        if (argc == 4 && std::wstring(argv[1]) == L"--child-hold") {
+            Handle file(
+                CreateFileW(argv[2], GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr));
+            if (!file.valid())
+                return 8;
+            WriteUtf8(argv[3], L"ready");
+            Sleep(30000);
+            return 0;
+        }
+        if (argc == 5 && std::wstring(argv[1]) == L"--child-lock-tree") {
+            auto ready = std::wstring(argv[3]) + L".ready";
+            STARTUPINFOW startup{sizeof startup};
+            PROCESS_INFORMATION process{};
+            auto line = QuoteArg(ExePath()) + L" --child-hold " + QuoteArg(argv[2]) + L" " + QuoteArg(ready);
+            if (!CreateProcessW(ExePath().c_str(), line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                                nullptr, nullptr, &startup, &process))
+                return 1;
+            Handle child(process.hProcess), thread(process.hThread);
+            auto deadline = GetTickCount64() + 5000;
+            while (!FileExists(ready) && GetTickCount64() < deadline)
+                Sleep(10);
+            if (!FileExists(ready))
+                return 2;
+            WriteUtf8(argv[3], std::to_wstring(process.dwProcessId));
+            std::cout << "holder ready\n" << std::flush;
+            auto mode = std::wstring(argv[4]);
+            if (mode == L"success" || mode == L"failure")
+                return mode == L"success" ? 0 : 7;
+            Sleep(30000);
+            return 0;
+        }
         if (argc == 2 && std::wstring(argv[1]) == L"--child-fail") {
             std::cout << "injected component preflight error\n";
             return 7;
@@ -1503,6 +1705,7 @@ int wmain(int argc, wchar_t **argv) {
         IdentityTests(argv[1]);
         PlanTests();
         WorkflowTests();
+        FinishTests();
         SnapshotTests();
         StorageCompatibilityTests();
         LayoutReadTests();
@@ -1510,6 +1713,7 @@ int wmain(int argc, wchar_t **argv) {
         PostPartitionTests(root);
         XmlTests();
         FileTests(root);
+        PinReleaseTests(root);
         WimReadTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
         {
             std::atomic<bool> stop = false;

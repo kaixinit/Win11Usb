@@ -309,6 +309,10 @@ std::vector<Volume> ReadVolumes() {
     HANDLE find = FindFirstVolumeW(name, MAX_PATH);
     if (find == INVALID_HANDLE_VALUE)
         throw Error(L"无法读取卷列表：" + WinError());
+    struct CloseVolumes {
+        HANDLE find;
+        ~CloseVolumes() { FindVolumeClose(find); }
+    } closeVolumes{find};
     do {
         Volume v;
         v.guid = name;
@@ -346,7 +350,6 @@ std::vector<Volume> ReadVolumes() {
         result.push_back(v);
     } while (FindNextVolumeW(find, name, MAX_PATH));
     DWORD last = GetLastError();
-    FindVolumeClose(find);
     if (last != ERROR_NO_MORE_FILES)
         throw Error(L"卷列表枚举不完整：" + WinError(last));
     return result;
@@ -412,6 +415,10 @@ Catalog ReadDisks() {
                                          DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if (list == INVALID_HANDLE_VALUE)
         throw Error(L"设备接口枚举失败：" + WinError());
+    struct CloseDevices {
+        HDEVINFO list;
+        ~CloseDevices() { SetupDiDestroyDeviceInfoList(list); }
+    } closeDevices{list};
     for (DWORD i = 0;; i++) {
         SP_DEVICE_INTERFACE_DATA di{};
         di.cbSize = sizeof di;
@@ -482,7 +489,6 @@ Catalog ReadDisks() {
             out.diagnostics.push_back(L"设备接口 " + std::to_wstring(i + 1) + L"：" + e.text);
         }
     }
-    SetupDiDestroyDeviceInfoList(list);
     out.diagnostics.insert(out.diagnostics.begin(),
                            L"设备扫描：" + std::to_wstring(out.interfaces) + L" 个磁盘接口，" +
                                std::to_wstring(out.disks.size()) + L" 个 USB 整盘，" +
@@ -508,7 +514,7 @@ Disk RecheckDisk(const Disk &expected, bool layout) {
 std::wstring DiskJson(const Catalog &c) {
     std::wstring s = L"{\"implementation\":\"C++/"
                      L"Win32\",\"read_only\":true,\"dotnet_required\":false,\"powershell_required\":false,"
-                     L"\"application_version\":\"0.2.0-preview.8\",\"administrator\":" +
+                     L"\"application_version\":\"0.2.0-preview.9\",\"administrator\":" +
                      std::wstring(IsAdmin() ? L"true" : L"false") + L",\"interface_count\":" +
                      std::to_wstring(c.interfaces) + L",\"non_usb_count\":" + std::to_wstring(c.nonUsb) +
                      L",\"failed_interface_count\":" + std::to_wstring(c.failed) +

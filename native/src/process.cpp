@@ -49,6 +49,14 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
         if (!commandLog.valid())
             throw Error(L"无法预先创建命令日志，尚未执行：" + logfile + L"\r\n" + WinError());
     }
+    struct CloseJob {
+        std::mutex &mutex;
+        Handle &job;
+        ~CloseJob() {
+            std::lock_guard<std::mutex> lock(mutex);
+            job.reset();
+        }
+    } closeJob{mutex, job};
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
     HANDLE oraw, owraw, iraw, iwraw;
     if (!CreatePipe(&oraw, &owraw, &sa, 0))
@@ -105,16 +113,79 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
         if (!AssignProcessToJobObject(job, pi.hProcess)) {
             DWORD e = GetLastError();
             TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 10000);
             CloseHandle(pi.hProcess);
             throw Error(L"无法建立本次命令的退出管理：" + WinError(e));
         }
         if (ResumeThread(thread) == (DWORD)-1) {
             TerminateJobObject(job, 1);
+            WaitForSingleObject(pi.hProcess, 10000);
             CloseHandle(pi.hProcess);
             throw Error(L"命令无法恢复执行。");
         }
     }
     Handle process(pi.hProcess);
+    // Retain real process handles while they are observable. A job's ActiveProcesses
+    // count alone is not proof that an observed process has completed pending I/O.
+    std::map<DWORD, Handle> members;
+    auto rememberMembers = [&] {
+        std::vector<BYTE> data(sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 64 * sizeof(ULONG_PTR));
+        for (;;) {
+            if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, data.data(), (DWORD)data.size(),
+                                          nullptr))
+                break;
+            if (GetLastError() != ERROR_MORE_DATA || data.size() >= 1024 * 1024)
+                throw Error(L"无法核验本次命令的进程组：" + WinError());
+            data.resize(data.size() * 2);
+        }
+        auto list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST *>(data.data());
+        for (DWORD i = 0; i < list->NumberOfProcessIdsInList; ++i) {
+            DWORD pid = (DWORD)list->ProcessIdList[i];
+            auto found = members.find(pid);
+            if (found != members.end() && WaitForSingleObject(found->second, 0) != WAIT_OBJECT_0)
+                continue;
+            Handle member(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+            if (!member.valid()) {
+                if (GetLastError() == ERROR_INVALID_PARAMETER)
+                    continue; // Already exited before its handle could be retained.
+                throw Error(L"无法核验本次命令的子进程：" + WinError());
+            }
+            BOOL belongs = FALSE;
+            if (!IsProcessInJob(member, job, &belongs))
+                throw Error(L"无法复核子进程所属任务：" + WinError());
+            if (belongs)
+                members[pid] = std::move(member);
+        }
+    };
+    bool reaped = false, stopAttempted = false;
+    auto stopTree = [&] {
+        if (reaped)
+            return;
+        stopAttempted = true;
+        rememberMembers();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!TerminateJobObject(job, ERROR_CANCELLED))
+                throw Error(L"无法结束本次命令的进程组：" + WinError());
+        }
+        auto deadline = GetTickCount64() + 10000;
+        for (;;) {
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION state{};
+            if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &state, sizeof state,
+                                           nullptr))
+                throw Error(L"无法复核命令退出状态：" + WinError());
+            bool exited = WaitForSingleObject(process, 0) == WAIT_OBJECT_0;
+            for (const auto &entry : members)
+                exited = (WaitForSingleObject(entry.second, 0) == WAIT_OBJECT_0) && exited;
+            if (exited && state.ActiveProcesses == 0) {
+                reaped = true;
+                return;
+            }
+            if (GetTickCount64() >= deadline)
+                throw Error(L"命令的进程组未在 10 秒内确认退出，停止后续操作。日志：" + logfile);
+            Sleep(20);
+        }
+    };
     writer.reset();
     in.reset();
     if (!input.empty()) {
@@ -123,7 +194,7 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
     }
     inputWriter.reset();
     std::string pending;
-    uint64_t start = GetTickCount64(), heartbeat = start, lastFlush = start;
+    uint64_t start = GetTickCount64(), heartbeat = start, lastFlush = start, lastMembers = 0;
     bool timedOut = false;
     auto emit = [&](std::string bytes) {
         if (bytes.empty())
@@ -151,9 +222,12 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
         for (;;) {
             CheckCancel(stop);
             uint64_t now = GetTickCount64();
+            if (now - lastMembers >= 100) {
+                rememberMembers();
+                lastMembers = now;
+            }
             if (now - start > timeout) {
                 timedOut = true;
-                Kill();
                 break;
             }
             if (now - heartbeat >= 5000) {
@@ -184,8 +258,7 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
                 break;
         }
         // Drain output already written before process exit.
-        Kill(); // Do not leave descendants alive or let them keep filling the output pipe.
-        WaitForSingleObject(process, 2000);
+        stopTree(); // End descendants and verify exit before handing files to the next stage.
         size_t drained = 0;
         for (; drained < 1024 * 1024;) {
             DWORD avail = 0;
@@ -200,8 +273,8 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
         }
         emit(pending);
     } catch (...) {
-        Kill();
-        WaitForSingleObject(process, 2000);
+        if (!stopAttempted)
+            stopTree();
         try {
             emit(pending);
         } catch (...) {
@@ -218,10 +291,6 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
     DWORD code = 1;
     if (!GetExitCodeProcess(process, &code) || code == STILL_ACTIVE)
         throw Error(L"无法核验命令退出状态。");
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        job.reset();
-    }
     if (code)
         throw Error(BaseName(program) + L" 返回错误 " + std::to_wstring(code) + L"。请查看：" + logfile);
     return code;
