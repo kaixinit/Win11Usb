@@ -129,7 +129,9 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
         result.cancelled = true;
         result.error = e.text;
         backend.Abort(false);
-        log(result.rebuildStarted ? L"制作已结束，目标盘可能需要重新制作。" : L"已取消，尚未清盘。");
+        log(result.copied           ? L"安装文件已复制并校验，后续清理或弹出操作已停止。"
+            : result.rebuildStarted ? L"制作已结束，目标盘可能需要重新制作。"
+                                    : L"已取消，尚未清盘。");
     } catch (const Error &e) {
         result.error = e.text;
         backend.Abort(false);

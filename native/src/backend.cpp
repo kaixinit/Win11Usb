@@ -33,39 +33,19 @@ void EnableVolumePrivilege() {
         GetLastError() == ERROR_NOT_ALL_ASSIGNED)
         throw Error(L"当前账户缺少磁盘管理权限。尚未清盘。");
 }
-std::wstring NewWork() {
+std::wstring WorkBase() {
     PWSTR raw = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &raw)))
         throw Error(L"无法获取本机临时目录。");
     std::wstring base = raw;
     CoTaskMemFree(raw);
-    GUID id{};
-    if (FAILED(CoCreateGuid(&id)))
-        throw Error(L"不能生成任务编号。");
-    wchar_t text[40];
-    StringFromGUID2(id, text, 40);
-    std::wstring path = base + L"\\Win11Usb-Native-" + std::wstring(text + 1, 36);
-    if (!CreateDirectoryW(path.c_str(), nullptr))
-        throw Error(L"不能创建独立任务目录：" + WinError());
-    return path;
+    return base;
 }
 uint64_t FreeBytes(const std::wstring &path) {
     ULARGE_INTEGER free{};
     if (!GetDiskFreeSpaceExW(path.c_str(), &free, nullptr, nullptr))
         throw Error(L"无法确认可用容量：" + WinError());
     return free.QuadPart;
-}
-std::vector<File> CopySet(const Prepared &p, const std::vector<File> &swm) {
-    std::vector<File> out;
-    for (auto &f : p.plan.files)
-        if (!p.plan.split || Lower(f.relative) != L"sources\\install.wim")
-            out.push_back(f);
-    for (auto &f : swm) {
-        File v = f;
-        v.relative = L"sources\\" + BaseName(v.full);
-        out.push_back(v);
-    }
-    return out;
 }
 struct IsoMount {
     Module library{L"virtdisk.dll"};
@@ -165,7 +145,11 @@ class NativeBackend final : public Backend {
     uint64_t partitionOffset = MiB, partitionSize = 0;
     Disk pinned;
     std::atomic<bool> aborted{false};
+    std::unique_ptr<TaskWorkspace> workspace;
     void SourceChecks(const Request &r, const Prepared &p) {
+        if (!workspace || p.work != workspace->Root())
+            throw Error(L"本次任务目录身份未确认。");
+        workspace->Validate();
         AssertOutside(r.iso, r.disk, L"安装 ISO");
         AssertOutside(r.launcher, r.disk, L"程序");
         AssertOutside(p.work, r.disk, L"本次临时目录");
@@ -191,10 +175,17 @@ class NativeBackend final : public Backend {
         while (GetTickCount64() - start < 30000) {
             CheckCancel(stop);
             auto now = RecheckDisk(r.disk, false);
-            if (!now.partitions.empty() &&
-                (now.partitions.size() != 1 || now.partitions[0].offset != partitionOffset ||
-                 now.partitions[0].size != partitionSize))
+            if (GetTickCount64() - last > 5000) {
+                if (h.log)
+                    h.log(L"正在等待新分区卷就绪…");
+                last = GetTickCount64();
+            }
+            if (!now.partitions.empty() && !CreatedPartitionReady(now, partitionOffset, partitionSize))
                 throw Error(L"新分区布局核验失败。");
+            if (!CreatedPartitionReady(now, partitionOffset, partitionSize)) {
+                Sleep(100);
+                continue;
+            }
             for (auto &v : ReadVolumes())
                 if (v.extents.size() == 1 && v.extents[0].disk == r.disk.number &&
                     v.extents[0].offset == partitionOffset && v.extents[0].size == partitionSize) {
@@ -205,11 +196,6 @@ class NativeBackend final : public Backend {
                     afterLayout = now.layout;
                     return;
                 }
-            if (GetTickCount64() - last > 5000) {
-                if (h.log)
-                    h.log(L"正在等待新分区卷就绪…");
-                last = GetTickCount64();
-            }
             Sleep(100);
         }
         throw Error(L"等待新分区卷超时；未进行格式化。");
@@ -223,6 +209,7 @@ class NativeBackend final : public Backend {
         RecheckDisk(r.disk, true);
         if (!r.disk.bootKnown)
             throw Error(L"启动分区映射未完整确认，尚未清盘。");
+        partitionSize = PlannedPartitionSize(r.disk);
         if (Lower(BaseName(r.iso)).size() < 5 || Lower(r.iso).substr(r.iso.size() - 4) != L".iso")
             throw Error(L"请选择 .iso 安装文件。");
         AssertOutside(r.iso, r.disk, L"安装 ISO");
@@ -233,13 +220,13 @@ class NativeBackend final : public Backend {
             throw Error(L"安装 ISO 不可读取或正在被改写：" + WinError());
         CheckCancel(stop);
         Prepared p;
-        p.work = NewWork();
+        workspace = TaskWorkspace::Create(WorkBase(), r.disk);
+        p.work = workspace->Root();
         work = p.work;
         if (h.workReady)
             h.workReady(p.work);
-        p.staging = p.work + L"\\staging";
-        AssertOutside(p.work, r.disk, L"本次临时目录");
-        MakeDirectory(p.staging);
+        p.staging = workspace->Directory(L"staging");
+        workspace->Directory(L"wim-temp");
         if (h.log)
             h.log(L"任务日志目录：" + p.work);
         iso = std::make_unique<IsoMount>();
@@ -247,7 +234,7 @@ class NativeBackend final : public Backend {
         auto files = ListFiles(p.source, stop);
         p.plan = PlanImages(p.source, files);
         for (auto path : {L"setup.exe", L"sources\\boot.wim", L"efi\\boot\\bootx64.efi"})
-            if (!FileExists(p.source + path))
+            if (!FileExists(p.source + path) || !FileSize(p.source + path))
                 throw Error(std::wstring(L"ISO 缺少 x64 安装启动文件：") + path + L"，尚未清盘。");
         p.image = ReadTaskWimIdentity(p.plan.images[0].full, r.iso, p.work, r.disk, h);
         if (p.image.arch != 9)
@@ -260,8 +247,11 @@ class NativeBackend final : public Backend {
         if (p.plan.split) {
             if (!FileExists(SystemFile(L"dism.exe")))
                 throw Error(L"精简系统缺少 dism.exe，无法拆分映像。尚未清盘。");
-            if (FreeBytes(p.work) < FileSize(p.plan.wim) + FileSize(p.plan.wim) / 20 + 64 * MiB)
-                throw Error(L"本机临时目录空间不足，无法拆分。尚未清盘。");
+            auto args = PrepareImageInfoArguments(p, *workspace);
+            if (h.log)
+                h.log(L"正在只读检查 DISM 组件与安装映像，尚未清盘…");
+            commands.Run(SystemFile(L"dism.exe"), args, p.work, p.work + L"\\dism-preflight.log", h, stop,
+                         2 * 60 * 1000);
         }
         if (r.fs == L"NTFS" && !FileExists(SystemFile(L"format.com")))
             throw Error(L"精简系统缺少 format.com。尚未清盘。");
@@ -393,10 +383,6 @@ class NativeBackend final : public Backend {
         if (!create.Mbr.Signature)
             create.Mbr.Signature = 0x57555342;
         Io(disk, IOCTL_DISK_CREATE_DISK, &create, sizeof create);
-        partitionSize = ((r.disk.size - partitionOffset - MiB) / MiB) * MiB;
-        uint64_t sectors = (partitionOffset + partitionSize) / r.disk.sector;
-        if (sectors > UINT32_MAX || partitionSize < GiB)
-            throw Error(L"整盘容量无法用安全 MBR 布局表示。");
         std::vector<BYTE> buffer(FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry) +
                                  4 * sizeof(PARTITION_INFORMATION_EX));
         auto layout = (DRIVE_LAYOUT_INFORMATION_EX *)buffer.data();
@@ -444,21 +430,21 @@ class NativeBackend final : public Backend {
             throw Error(L"格式化后的实际可用容量不足。");
         std::wstring letter{p.letter, L':', L'\\'};
         DWORD used = GetLogicalDrives();
-        if (used & (1u << (p.letter - L'A')))
-            throw Error(L"预定盘符已被其他设备占用，保留格式化分区并停止。");
-        if (!SetVolumeMountPointW(letter.c_str(), volume.c_str()))
+        if (used & (1u << (p.letter - L'A'))) {
+            wchar_t existing[MAX_PATH];
+            if (!GetVolumeNameForVolumeMountPointW(letter.c_str(), existing, MAX_PATH) ||
+                Lower(existing) != Lower(volume))
+                throw Error(L"预定盘符已被其他设备占用，保留格式化分区并停止。");
+        } else if (!SetVolumeMountPointW(letter.c_str(), volume.c_str()))
             throw Error(L"格式化成功，但盘符分配失败：" + WinError());
         TargetVolume(r);
         return letter;
     }
     std::vector<File> Split(const Prepared &p, const Hooks &h, std::atomic<bool> &stop) override {
-        if (!ListFiles(p.staging + L"\\", stop).empty())
-            throw Error(L"本次 SWM 目录非空，停止拆分。");
-        commands.Run(SystemFile(L"dism.exe"),
-                     {L"/English", L"/Split-Image", L"/ImageFile:" + p.plan.wim,
-                      L"/SWMFile:" + p.staging + L"\\install.swm", L"/FileSize:4000", L"/CheckIntegrity",
-                      L"/LogPath:" + p.work + L"\\dism-detail.log"},
-                     p.work, p.work + L"\\dism-split.log", h, stop);
+        if (!workspace)
+            throw Error(L"本次任务目录不可用。");
+        auto args = PrepareSplitArguments(p, *workspace);
+        commands.Run(SystemFile(L"dism.exe"), args, p.work, p.work + L"\\dism-split.log", h, stop);
         auto files = ListFiles(p.staging + L"\\", stop);
         CheckSwm(files);
         return files;
@@ -466,7 +452,7 @@ class NativeBackend final : public Backend {
     void Copy(const Request &r, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
               const Hooks &h, std::atomic<bool> &stop) override {
         TargetVolume(r);
-        auto files = CopySet(p, swm);
+        auto files = InstallationFiles(p, swm);
         uint64_t total = 0;
         for (auto &f : files) {
             if (UINT64_MAX - total < f.size)
@@ -480,7 +466,7 @@ class NativeBackend final : public Backend {
     void Verify(const Request &r, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
                 std::atomic<bool> &stop) override {
         TargetVolume(r);
-        VerifyFilesNative(CopySet(p, swm), volume, stop);
+        VerifyFilesNative(InstallationFiles(p, swm), volume, stop);
         for (auto f : {L"efi\\boot\\bootx64.efi", L"sources\\boot.wim", L"setup.exe"})
             if (!FileSize(volume + f))
                 throw Error(L"关键安装启动文件校验失败。");
@@ -492,17 +478,9 @@ class NativeBackend final : public Backend {
             throw Error(L"目标卷写入缓存刷新失败：" + WinError());
     }
     void Cleanup(const Prepared &p, const std::vector<File> &swm) override {
-        if (p.work != work || Lower(p.staging) != Lower(work + L"\\staging"))
+        if (!workspace || p.work != work || Lower(p.staging) != Lower(workspace->Directory(L"staging")))
             throw Error(L"临时目录身份校验失败。");
-        for (auto &f : swm) {
-            if (Lower(Parent(f.full)) != Lower(p.staging) ||
-                GetFileAttributesW(f.full.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT)
-                throw Error(L"清理路径超出本次 SWM 目录。");
-        }
-        for (auto &f : swm)
-            if (!DeleteFileW(f.full.c_str()))
-                throw Error(L"临时文件无法删除：" + f.full);
-        RemoveDirectoryW(p.staging.c_str());
+        workspace->CleanupSwm(swm);
     }
     void EjectUsb(const Request &r, const std::wstring &) override {
         TargetVolume(r);
@@ -520,8 +498,8 @@ class NativeBackend final : public Backend {
         std::wstring pnp = r.disk.pnp;
         if (CM_Locate_DevNodeW(&dev, pnp.data(), CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS)
             throw Error(L"不能定位 USB 设备。");
-        PNP_VETO_TYPE veto;
-        wchar_t name[512];
+        PNP_VETO_TYPE veto = PNP_VetoTypeUnknown;
+        wchar_t name[512]{};
         CONFIGRET e = CM_Request_Device_EjectW(dev, &veto, name, 512, 0);
         if (e != CR_SUCCESS)
             throw Error(L"设备仍被使用（CM " + std::to_wstring(e) + L"，veto " + std::to_wstring(veto) +

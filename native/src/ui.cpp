@@ -376,7 +376,7 @@ struct Ui {
         dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetSaveFileNameW(&dialog))
             return;
-        std::wstring report = L"Win11Usb 0.2.0-preview.4 — 设备识别诊断\r\n";
+        std::wstring report = L"Win11Usb 0.2.0-preview.5 — 设备识别诊断\r\n";
         report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
                          : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
         report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +
@@ -1030,9 +1030,10 @@ struct Ui {
             State();
             Scan();
             if (!r->error.empty())
-                Ask(window, L"本次制作已停止",
-                    r->rebuildStarted ? L"目标磁盘可能需要重新制作，请查看日志。"
-                                      : L"本次未开始清盘，请查看日志。",
+                Ask(window, r->copied ? L"安装文件已就绪" : L"本次制作已停止",
+                    r->copied           ? L"安装文件已复制并校验，后续清理或弹出未完成，请查看日志。"
+                    : r->rebuildStarted ? L"目标磁盘可能需要重新制作，请查看日志。"
+                                        : L"本次未开始清盘，请查看日志。",
                     r->error, L"确定", L"返回");
             return 0;
         }

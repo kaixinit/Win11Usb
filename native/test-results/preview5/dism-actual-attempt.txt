@@ -1,0 +1,6 @@
+
+Error: 740
+
+Elevated permissions are required to run DISM.
+Use an elevated command prompt to complete these tasks.
+DISM_EXIT_CODE=740

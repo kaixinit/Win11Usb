@@ -53,33 +53,9 @@ std::wstring PrepareScratch(const std::wstring &path, const Hooks &hooks) {
         throw Error(L"未指定 WIM 临时目录。尚未清盘。");
     auto scratch = FullPath(path);
     MakeDirectory(scratch);
-    ULARGE_INTEGER available{};
-    if (!GetDiskFreeSpaceExW(scratch.c_str(), &available, nullptr, nullptr))
-        throw Error(L"无法确认 WIM 临时目录的可用空间：" + scratch + L"\r\n" + WinError() +
-                    L"\r\n尚未清盘。");
-    // A small reserve catches a full drive before WIMGAPI starts extracting metadata.
-    // Larger metadata may still need more space; WIMGAPI errors retain the path and code.
-    if (available.QuadPart < 64 * MiB)
-        throw Error(L"WIM 临时目录空间不足，读取前至少需预留 64 MiB：" + scratch + L"\r\n当前可用：" +
-                    FormatSize(available.QuadPart) + L"。尚未清盘。");
-    GUID id{};
-    if (FAILED(CoCreateGuid(&id)))
-        throw Error(L"无法生成 WIM 临时目录写入检查文件名。尚未清盘。");
-    wchar_t name[40];
-    StringFromGUID2(id, name, 40);
-    auto probe = scratch + L"\\write-check-" + name + L".tmp";
-    Handle file(CreateFileW(probe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                            FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
-    if (!file.valid())
-        throw Error(L"WIM 临时目录不可写：" + scratch + L"\r\n" + WinError() + L"\r\n尚未清盘。");
-    const char content[] = "Win11Usb WIM scratch check";
-    DWORD written = 0;
-    if (!WriteFile(file, content, sizeof content, &written, nullptr) || written != sizeof content ||
-        !FlushFileBuffers(file))
-        throw Error(L"WIM 临时目录写入检查失败：" + scratch + L"\r\n" + WinError() + L"\r\n尚未清盘。");
-    file.reset();
+    auto available = CheckWritableDirectory(scratch, 64 * MiB);
     if (hooks.log)
-        hooks.log(L"WIM 临时目录：" + scratch + L"；可用空间：" + FormatSize(available.QuadPart));
+        hooks.log(L"WIM 临时目录：" + scratch + L"；可用空间：" + FormatSize(available));
     return scratch;
 }
 } // namespace
@@ -152,10 +128,8 @@ ImageIdentity ReadTaskWimIdentity(const std::wstring &image, const std::wstring 
         throw Error(L"未指定本次任务目录。尚未清盘。");
     // FinalPath/AssertOutside requires an existing path. Validate the existing task
     // directory first, create its fixed child, then check that child's actual volume.
-    AssertOutside(work, target, L"本次临时目录");
-    auto scratch = FullPath(work) + L"\\wim-temp";
-    MakeDirectory(scratch);
-    AssertOutside(scratch, target, L"WIM 临时目录");
+    TaskWorkspace workspace(work, target);
+    auto scratch = workspace.Directory(L"wim-temp");
     return ReadWimIdentity(image, iso, scratch, hooks);
 }
 } // namespace wu

@@ -242,6 +242,23 @@ void WorkflowTests() {
         auto r = RunWorkflow(TestRequest(), f, h, s);
         Require(r.cancelled && !f.Has(L"format"), "missing confirmation callback defaults cancel");
     }
+    {
+        Fake f;
+        std::atomic<bool> stop = false;
+        std::wstring messages;
+        Hooks h;
+        h.ask = [](Prompt, const std::wstring &) { return true; };
+        h.progress = [&](const Progress &p) {
+            if (p.stage == 6)
+                stop = true;
+        };
+        h.log = [&](const std::wstring &s) { messages += s; };
+        auto r = RunWorkflow(TestRequest(), f, h, stop);
+        Require(r.copied && r.cancelled && !f.Has(L"eject-usb"),
+                "cancelling cleanup preserves verified installation files");
+        Require(messages.find(L"可能需要重新制作") == messages.npos,
+                "post-verification cancellation does not incorrectly report failed copy");
+    }
     std::cout << "PASS full FAT32/NTFS state machine, prompts and injected failures\n";
 }
 void FileTests(const std::wstring &root) {
@@ -260,6 +277,15 @@ void FileTests(const std::wstring &root) {
     Require(progress > 0, "actual CopyFileEx reports progress");
     Require(Read(root + L"\\target\\目录\\中文 文件.txt") == L"native UTF-8 file\r\n",
             "actual Unicode file copied");
+    wchar_t volumeRoot[MAX_PATH], guid[MAX_PATH];
+    Require(GetVolumePathNameW(root.c_str(), volumeRoot, MAX_PATH) &&
+                GetVolumeNameForVolumeMountPointW(volumeRoot, guid, MAX_PATH),
+            "resolve actual volume GUID for copy destination fixture");
+    auto guidTarget = std::wstring(guid) + FullPath(root).substr(wcslen(volumeRoot)) + L"\\guid-copy\\";
+    CopyFilesNative(files, guidTarget, h, stop);
+    VerifyFilesNative(files, guidTarget, stop);
+    Require(Read(root + L"\\guid-copy\\目录\\中文 文件.txt") == L"native UTF-8 file\r\n",
+            "production copy and directory creation work through real volume-GUID paths");
     Reject([&] { CopyFilesNative(files, root + L"\\target\\", h, stop); },
            "native copy refuses to overwrite unknown existing file");
     WriteUtf8(root + L"\\target\\boot.bin", L"corrupt length");
@@ -564,6 +590,238 @@ void WimApiTest(const std::wstring &root) {
             "actual native WIMGAPI metadata roundtrip");
     std::cout << "PASS actual native WIM capture and read-only metadata roundtrip\n";
 }
+void WorkspaceTests(const std::wstring &root) {
+    Disk outside;
+    outside.number = MAXDWORD;
+    auto task = TaskWorkspace::Create(root, outside);
+    auto staging = task->Directory(L"staging");
+    auto wim = task->Directory(L"wim-temp");
+    auto scratch = task->Directory(L"dism-temp");
+    Require(PathDisks(staging) == PathDisks(task->Root()) && PathDisks(wim) == PathDisks(scratch),
+            "all created task directories map to the verified physical volume");
+    Require(!MoveFileW(task->Root().c_str(), (task->Root() + L"-moved").c_str()),
+            "live task root is pinned against rename");
+    Require(!MoveFileW(staging.c_str(), (staging + L"-moved").c_str()),
+            "live task child is pinned against rename");
+    for (auto name : {L"../escape", L"..\\escape", L"C:\\escape", L"a\\b", L""})
+        Reject([&] { task->Directory(name); }, "task child traversal or absolute name rejected");
+    Reject([&] { CheckWritableDirectory(staging, UINT64_MAX); }, "insufficient scratch capacity rejected");
+    std::atomic<bool> stop = false;
+    Require(ListFiles(staging + L"\\", stop).empty(), "write probes do not contaminate SWM staging");
+    auto source = root + L"\\split-input.wim";
+    WriteUtf8(source, L"synthetic split input");
+    Prepared p;
+    p.work = task->Root();
+    p.staging = staging;
+    p.plan.wim = source;
+    auto args = PrepareSplitArguments(p, *task);
+    Require(std::find(args.begin(), args.end(), L"/ScratchDir:" + scratch) != args.end(),
+            "production DISM arguments use existing dedicated local scratch");
+    Require(std::find(args.begin(), args.end(), L"/FileSize:4000") != args.end(),
+            "audited split retains original 4000 MiB DISM setting");
+    WriteUtf8(staging + L"\\unexpected.txt", L"keep");
+    Reject([&] { PrepareSplitArguments(p, *task); }, "staging contamination stops before DISM launch");
+    Require(DeleteFileW((staging + L"\\unexpected.txt").c_str()) != FALSE, "remove own test marker");
+    auto other = TaskWorkspace::Create(root, outside);
+    auto otherStage = other->Directory(L"staging");
+    WriteUtf8(staging + L"\\install.swm", L"first");
+    WriteUtf8(staging + L"\\install2.swm", L"second");
+    WriteUtf8(otherStage + L"\\install2.swm", L"protect other job");
+    std::vector<File> swm = {{staging + L"\\install.swm", L"install.swm", 5},
+                             {staging + L"\\install2.swm", L"install2.swm", 6}};
+    auto mixed = swm;
+    mixed[1].full = otherStage + L"\\install2.swm";
+    mixed[1].size = FileSize(mixed[1].full);
+    Reject([&] { task->CleanupSwm(mixed); }, "SWM from another task cannot be deleted");
+    Require(FileExists(swm[0].full) && FileExists(mixed[1].full),
+            "entire cleanup manifest is validated before any file deletion");
+    auto changed = swm;
+    changed[1].size++;
+    Reject([&] { task->CleanupSwm(changed); }, "changed temporary SWM is not deleted");
+    Require(FileExists(swm[0].full), "size mismatch preserves previously validated SWM too");
+    task->CleanupSwm(swm);
+    Require(!FileExists(swm[0].full) && !FileExists(swm[1].full) && FileExists(mixed[1].full),
+            "handle-based SWM cleanup removes only selected task files");
+    task->Validate();
+    Disk same;
+    same.number = PathDisks(root)[0];
+    auto before = ListFiles(root + L"\\", stop).size();
+    Reject([&] { TaskWorkspace::Create(root, same); },
+           "work base on target disk rejected before task creation");
+    Require(before == ListFiles(root + L"\\", stop).size(), "target-disk rejection creates no probe files");
+    Disk d;
+    d.size = 64 * GiB;
+    d.sector = 512;
+    Require(PlannedPartitionSize(d) == d.size - 2 * MiB,
+            "full capacity partition includes alignment reserve");
+    d.size = 2 * 1024 * GiB;
+    Require(PlannedPartitionSize(d) < d.size, "2 TiB MBR limit is checked before destructive calls");
+    d.sector = 4096;
+    Require(PlannedPartitionSize(d) % d.sector == 0, "4Kn full partition remains sector aligned");
+    d.sector = 0;
+    Reject([&] { PlannedPartitionSize(d); }, "unknown sector size rejected before partition arithmetic");
+    d.sector = 512;
+    d.size = 4 * GiB;
+    Reject([&] { PlannedPartitionSize(d); }, "unsupported capacity rejected before clearing disk");
+    d.size = 64 * GiB;
+    d.style = PARTITION_STYLE_MBR;
+    Require(!CreatedPartitionReady(d, MiB, 62 * GiB), "zero partition cache is not new volume readiness");
+    Partition partition;
+    partition.offset = MiB;
+    partition.size = 62 * GiB;
+    d.partitions.push_back(partition);
+    Require(CreatedPartitionReady(d, MiB, 62 * GiB), "exact created partition permits volume lookup");
+    d.partitions[0].size++;
+    Require(!CreatedPartitionReady(d, MiB, 62 * GiB), "changed partition extent is rejected");
+    std::cout
+        << "PASS actual task directory pins, DISM scratch, strict SWM cleanup and partition readiness\n";
+}
+struct FileWorkflow final : Backend {
+    std::wstring base, source, output;
+    bool split, formatted = false, copied = false, ejected = false, failPreflight = false;
+    std::unique_ptr<TaskWorkspace> task;
+    FileWorkflow(std::wstring b, std::wstring s, bool split)
+        : base(std::move(b)), source(std::move(s)), split(split) {
+        output = base + L"\\output\\";
+    }
+    Prepared Prepare(const Request &r, const Hooks &h, std::atomic<bool> &stop) override {
+        task = TaskWorkspace::Create(base, r.disk);
+        Prepared p;
+        p.work = task->Root();
+        if (h.workReady)
+            h.workReady(p.work);
+        p.staging = task->Directory(L"staging");
+        task->Directory(L"wim-temp");
+        p.source = source;
+        p.plan = PlanImages(source, ListFiles(source, stop));
+        p.image = ReadTaskWimIdentity(p.plan.images[0].full, r.iso, p.work, r.disk, h);
+        // Test-only split branch: DISM and physical format are replaced; file operations are real.
+        p.plan.split = split;
+        if (split) {
+            auto args = PrepareImageInfoArguments(p, *task);
+            args.insert(args.begin(), {L"--child-args", p.work + L"\\preflight-args.json"});
+            if (failPreflight)
+                args = {L"--child-fail"};
+            CommandRunner command;
+            command.Run(ExePath(), args, p.work, p.work + L"\\dism-preflight.log", h, stop, 10000);
+        }
+        return p;
+    }
+    void Validate(const Request &, const Prepared &, bool) override { task->Validate(); }
+    std::wstring Format(const Request &, const Prepared &, const Hooks &, std::atomic<bool> &) override {
+        formatted = true;
+        MakeDirectory(output);
+        return output;
+    }
+    std::vector<File> Split(const Prepared &p, const Hooks &h, std::atomic<bool> &stop) override {
+        auto args = PrepareSplitArguments(p, *task);
+        args.insert(args.begin(), {L"--child-split-fixture", p.staging});
+        CommandRunner command;
+        command.Run(ExePath(), args, p.work, p.work + L"\\split-command.log", h, stop, 10000);
+        auto swm = ListFiles(p.staging + L"\\", stop);
+        CheckSwm(swm);
+        return swm;
+    }
+    void Copy(const Request &, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
+              const Hooks &h, std::atomic<bool> &stop) override {
+        CopyFilesNative(InstallationFiles(p, swm), output, h, stop);
+        copied = true;
+    }
+    void Verify(const Request &, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
+                std::atomic<bool> &stop) override {
+        VerifyFilesNative(InstallationFiles(p, swm), output, stop);
+    }
+    void Cleanup(const Prepared &, const std::vector<File> &swm) override { task->CleanupSwm(swm); }
+    void EjectUsb(const Request &, const std::wstring &) override { ejected = true; }
+    void EjectIso() override {}
+    void Abort(bool) noexcept override {}
+};
+void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
+    for (auto fs : {L"FAT32", L"NTFS"})
+        for (bool split : {false, true}) {
+            auto base = root + L"\\file-flow-" + fs + (split ? L"-split" : L"-small");
+            auto source = base + L"\\media\\";
+            MakeDirectory(source + L"sources");
+            MakeDirectory(source + L"efi\\boot");
+            WriteUtf8(source + L"setup.exe", L"test setup");
+            WriteUtf8(source + L"sources\\boot.wim", L"test boot");
+            WriteUtf8(source + L"efi\\boot\\bootx64.efi", L"test EFI");
+            Require(CopyFileW(fixture.c_str(), (source + L"sources\\install.wim").c_str(), TRUE) != FALSE,
+                    "prepare real metadata fixture for six-stage file integration");
+            auto request = TestRequest(fs);
+            request.disk.number = MAXDWORD;
+            request.iso = L"windows_11_26h2.iso";
+            FileWorkflow backend(base, source, split);
+            std::atomic<bool> stop = false;
+            Hooks h;
+            h.ask = [](Prompt, const std::wstring &) { return true; };
+            auto result = RunWorkflow(request, backend, h, stop);
+            Require(result.copied && result.error.empty() && backend.ejected,
+                    "six-stage file integration completes with shared production path functions");
+            Require(FileExists(backend.output + L"sources\\install.wim") != split &&
+                        FileExists(backend.output + L"sources\\install.swm") == split,
+                    "shared production copy set replaces WIM only for split branch on FAT32 and NTFS");
+            std::atomic<bool> scan = false;
+            Require(ListFiles(backend.task->Directory(L"staging") + L"\\", scan).empty(),
+                    "post-copy cleanup clears own SWM while copied installation files remain");
+        }
+    auto failureBase = root + L"\\file-flow-preflight-failure";
+    MakeDirectory(failureBase);
+    FileWorkflow failure(failureBase, root + L"\\file-flow-FAT32-small\\media\\", true);
+    failure.failPreflight = true;
+    auto request = TestRequest();
+    request.disk.number = MAXDWORD;
+    request.iso = L"windows_11_26h2.iso";
+    Hooks hooks;
+    hooks.ask = [](Prompt, const std::wstring &) { return true; };
+    std::atomic<bool> stop = false;
+    auto result = RunWorkflow(request, failure, hooks, stop);
+    Require(!result.error.empty() && !failure.formatted && !failure.copied,
+            "failed component preflight command stops before any format or copy call");
+    Require(FileSize(result.work + L"\\dism-preflight.log") > 0,
+            "preflight command failure preserves its diagnostic output");
+    std::cout << "PASS six-stage FAT32/NTFS file integration; format, DISM data and eject are test doubles\n";
+}
+void JunctionTests(const std::wstring &root) {
+    auto work = root + L"\\junction-scope";
+    auto protectedDirectory = root + L"\\junction-protected";
+    MakeDirectory(work);
+    MakeDirectory(protectedDirectory);
+    WriteUtf8(protectedDirectory + L"\\install.swm", L"keep outside task");
+    Disk outside;
+    outside.number = MAXDWORD;
+    TaskWorkspace task(work, outside);
+    auto staging = task.Directory(L"staging");
+    std::wstring print = FullPath(protectedDirectory), substitute = L"\\??\\" + print;
+    size_t firstBytes = substitute.size() * sizeof(wchar_t), printBytes = print.size() * sizeof(wchar_t);
+    std::vector<BYTE> buffer(16 + firstBytes + sizeof(wchar_t) + printBytes + sizeof(wchar_t));
+    auto tag = (DWORD *)buffer.data();
+    *tag = IO_REPARSE_TAG_MOUNT_POINT;
+    auto fields = (USHORT *)(buffer.data() + 4);
+    fields[0] = (USHORT)(buffer.size() - 8);
+    fields[2] = 0;
+    fields[3] = (USHORT)firstBytes;
+    fields[4] = (USHORT)(firstBytes + sizeof(wchar_t));
+    fields[5] = (USHORT)printBytes;
+    std::memcpy(buffer.data() + 16, substitute.data(), firstBytes);
+    std::memcpy(buffer.data() + 16 + firstBytes + sizeof(wchar_t), print.data(), printBytes);
+    Handle directory(CreateFileW(staging.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                 OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                                 nullptr));
+    DWORD returned = 0;
+    if (!directory.valid() || !DeviceIoControl(directory, FSCTL_SET_REPARSE_POINT, buffer.data(),
+                                               (DWORD)buffer.size(), nullptr, 0, &returned, nullptr)) {
+        std::cout << "NOT RUN junction-mutation fixture: " << Utf8(WinError()) << '\n';
+        return;
+    }
+    directory.reset();
+    Reject([&] { task.Validate(); }, "live task rejects a child changed into an actual NTFS junction");
+    Reject([&] { task.CleanupSwm({{staging + L"\\install.swm", L"install.swm", 17}}); },
+           "junction cannot redirect cleanup outside this task");
+    Require(Read(protectedDirectory + L"\\install.swm") == L"keep outside task",
+            "real junction fixture preserves file outside task");
+    std::cout << "PASS real NTFS junction replacement and cleanup scope guard\n";
+}
 void ProcessTests(const std::wstring &root) {
     CommandRunner run;
     std::atomic<bool> stop = false;
@@ -600,11 +858,51 @@ void ProcessTests(const std::wstring &root) {
     Handle descendantHandle(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, descendant));
     Require(!descendantHandle.valid() || WaitForSingleObject(descendantHandle, 2000) == WAIT_OBJECT_0,
             "Job cancellation leaves no descendant process");
+    auto marker = root + L"\\should-not-start.txt";
+    Reject([&] { run.Run(ExePath(), {L"--child-mark", marker}, root, root, h, stop, 10000); },
+           "invalid log destination stops before launching command");
+    Require(!FileExists(marker), "log preflight failure never starts child");
+    auto liveLog = root + L"\\live-command.log";
+    bool sawLiveLog = false;
+    h.log = [&](const std::wstring &) {
+        sawLiveLog = FileExists(liveLog) && FileSize(liveLog) > 0;
+        stop = true;
+    };
+    Reject([&] { run.Run(ExePath(), {L"--child-noisy"}, root, liveLog, h, stop, 10000); },
+           "continuous command output still accepts cancellation");
+    Require(sawLiveLog && FileSize(liveLog) > 0,
+            "command log is visible before exit and survives cancellation");
+    stop = false;
+    tick = GetTickCount64();
+    Reject(
+        [&] { run.Run(ExePath(), {L"--child-noisy"}, root, root + L"\\noisy-timeout.log", {}, stop, 200); },
+        "continuous command output still enforces timeout");
+    Require(GetTickCount64() - tick < 5000, "busy output cannot starve command timeout checks");
     std::cout << "PASS actual native process argv, timeout and owned-job cancellation\n";
 }
 } // namespace
 int wmain(int argc, wchar_t **argv) {
     try {
+        if (argc == 2 && std::wstring(argv[1]) == L"--child-fail") {
+            std::cout << "injected component preflight error\n";
+            return 7;
+        }
+        if (argc >= 3 && std::wstring(argv[1]) == L"--child-split-fixture") {
+            WriteUtf8(std::wstring(argv[2]) + L"\\install.swm", L"synthetic first SWM");
+            WriteUtf8(std::wstring(argv[2]) + L"\\install2.swm", L"synthetic second SWM");
+            std::cout << "test split output ready\n";
+            return 0;
+        }
+        if (argc == 3 && std::wstring(argv[1]) == L"--child-mark") {
+            WriteUtf8(argv[2], L"started");
+            return 0;
+        }
+        if (argc == 2 && std::wstring(argv[1]) == L"--child-noisy") {
+            for (;;) {
+                std::cout << std::string(4095, 'N') << '\n' << std::flush;
+                Sleep(1);
+            }
+        }
         if (argc >= 3 && std::wstring(argv[1]) == L"--child-args") {
             std::wstring s = L"[";
             for (int i = 3; i < argc; i++) {
@@ -646,12 +944,15 @@ int wmain(int argc, wchar_t **argv) {
         FileTests(root);
         WimReadTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
         WimTaskTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
+        WorkspaceTests(root);
+        FileWorkflowTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
         if (argc == 4 && std::wstring(argv[3]) == L"--wim-roundtrip")
             WimApiTest(root);
         else
             std::cout << "NOT RUN WIM capture roundtrip: requires administrator backup privilege; use "
                          "--wim-roundtrip\n";
         ProcessTests(root);
+        JunctionTests(root);
         std::cout << "PASS " << checks << " assertions; no physical disks were written\n";
         WriteUtf8(root + L"\\result.txt",
                   L"PASS " + std::to_wstring(checks) + L" assertions; no physical disks written\r\n");

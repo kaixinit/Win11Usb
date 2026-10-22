@@ -2,6 +2,17 @@
 #include <algorithm>
 
 namespace wu {
+std::vector<File> InstallationFiles(const Prepared &p, const std::vector<File> &swm) {
+    std::vector<File> files;
+    for (const auto &file : p.plan.files)
+        if (!p.plan.split || Lower(file.relative) != L"sources\\install.wim")
+            files.push_back(file);
+    for (auto file : swm) {
+        file.relative = L"sources\\" + BaseName(file.full);
+        files.push_back(std::move(file));
+    }
+    return files;
+}
 void MakeDirectory(const std::wstring &p) {
     if (p.empty())
         throw Error(L"临时路径为空。");

@@ -36,6 +36,19 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
     CheckCancel(stop);
     if (!FileExists(program))
         throw Error(L"所需命令不存在：" + program + L"。尚未执行。 ");
+    if (!cwd.empty()) {
+        DWORD attributes = GetFileAttributesW(cwd.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            throw Error(L"命令工作目录不存在或类型无效，尚未执行：" + cwd);
+    }
+    Handle commandLog;
+    if (!logfile.empty()) {
+        commandLog.reset(CreateFileW(logfile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
+                                     FILE_ATTRIBUTE_NORMAL, nullptr));
+        if (!commandLog.valid())
+            throw Error(L"无法预先创建命令日志，尚未执行：" + logfile + L"\r\n" + WinError());
+    }
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
     HANDLE oraw, owraw, iraw, iwraw;
     if (!CreatePipe(&oraw, &owraw, &sa, 0))
@@ -109,8 +122,8 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
         WriteFile(inputWriter, input.data(), (DWORD)input.size(), &written, nullptr);
     }
     inputWriter.reset();
-    std::string raw, pending;
-    uint64_t start = GetTickCount64(), heartbeat = start;
+    std::string pending;
+    uint64_t start = GetTickCount64(), heartbeat = start, lastFlush = start;
     bool timedOut = false;
     auto emit = [&](std::string bytes) {
         if (bytes.empty())
@@ -119,38 +132,24 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
         std::wstring s(n, 0);
         if (n)
             MultiByteToWideChar(CP_OEMCP, 0, bytes.data(), (int)bytes.size(), s.data(), n);
+        if (commandLog.valid()) {
+            auto utf = Utf8(s + L"\r\n");
+            DWORD written = 0;
+            if (!WriteFile(commandLog, utf.data(), (DWORD)utf.size(), &written, nullptr) ||
+                written != utf.size())
+                throw Error(L"命令日志写入失败：" + logfile + L"\r\n" + WinError());
+            if (GetTickCount64() - lastFlush >= 1000) {
+                if (!FlushFileBuffers(commandLog))
+                    throw Error(L"命令日志刷新失败：" + logfile + L"\r\n" + WinError());
+                lastFlush = GetTickCount64();
+            }
+        }
         if (h.log)
             h.log(Trim(s));
     };
     try {
         for (;;) {
-            DWORD avail = 0;
-            if (PeekNamedPipe(output, nullptr, 0, nullptr, &avail, nullptr) && avail) {
-                char buffer[8192];
-                DWORD read = 0;
-                if (ReadFile(output, buffer, std::min<DWORD>(sizeof buffer, avail), &read, nullptr) && read) {
-                    raw.append(buffer, read);
-                    pending.append(buffer, read);
-                    size_t i = 0;
-                    while ((i = pending.find_first_of("\r\n")) != std::string::npos) {
-                        emit(pending.substr(0, i));
-                        pending.erase(0, i + 1);
-                    }
-                    if (pending.size() > 32768) {
-                        emit(pending);
-                        pending.clear();
-                    }
-                    if (raw.size() > 16 * 1024 * 1024)
-                        raw.erase(0, raw.size() - 16 * 1024 * 1024);
-                    continue;
-                }
-            }
-            if (WaitForSingleObject(process, 100) == WAIT_OBJECT_0)
-                break;
-            if (stop) {
-                Kill();
-                throw Cancelled();
-            }
+            CheckCancel(stop);
             uint64_t now = GetTickCount64();
             if (now - start > timeout) {
                 timedOut = true;
@@ -163,9 +162,32 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
                           L" 秒");
                 heartbeat = now;
             }
+            DWORD avail = 0;
+            if (PeekNamedPipe(output, nullptr, 0, nullptr, &avail, nullptr) && avail) {
+                char buffer[8192];
+                DWORD read = 0;
+                if (ReadFile(output, buffer, std::min<DWORD>(sizeof buffer, avail), &read, nullptr) && read) {
+                    pending.append(buffer, read);
+                    size_t i = 0;
+                    while ((i = pending.find_first_of("\r\n")) != std::string::npos) {
+                        emit(pending.substr(0, i));
+                        pending.erase(0, i + 1);
+                    }
+                    if (pending.size() > 32768) {
+                        emit(pending);
+                        pending.clear();
+                    }
+                    continue;
+                }
+            }
+            if (WaitForSingleObject(process, 100) == WAIT_OBJECT_0)
+                break;
         }
         // Drain output already written before process exit.
-        for (;;) {
+        Kill(); // Do not leave descendants alive or let them keep filling the output pipe.
+        WaitForSingleObject(process, 2000);
+        size_t drained = 0;
+        for (; drained < 1024 * 1024;) {
             DWORD avail = 0;
             if (!PeekNamedPipe(output, nullptr, 0, nullptr, &avail, nullptr) || !avail)
                 break;
@@ -173,28 +195,23 @@ DWORD CommandRunner::Run(const std::wstring &program, const std::vector<std::wst
             DWORD n = 0;
             if (!ReadFile(output, b, std::min<DWORD>(avail, sizeof b), &n, nullptr) || !n)
                 break;
-            raw.append(b, n);
             pending.append(b, n);
+            drained += n;
         }
         emit(pending);
     } catch (...) {
         Kill();
         WaitForSingleObject(process, 2000);
-        if (!logfile.empty()) {
-            try {
-                WriteUtf8(logfile, Wide(raw));
-            } catch (...) {
-            }
+        try {
+            emit(pending);
+        } catch (...) {
         }
+        if (commandLog.valid())
+            FlushFileBuffers(commandLog);
         throw;
     }
-    if (!logfile.empty()) {
-        int n = MultiByteToWideChar(CP_OEMCP, 0, raw.data(), (int)raw.size(), nullptr, 0);
-        std::wstring s(n, 0);
-        if (n)
-            MultiByteToWideChar(CP_OEMCP, 0, raw.data(), (int)raw.size(), s.data(), n);
-        WriteUtf8(logfile, s);
-    }
+    if (commandLog.valid() && !FlushFileBuffers(commandLog))
+        throw Error(L"命令日志刷新失败：" + logfile + L"\r\n" + WinError());
     if (timedOut)
         throw Error(L"命令执行超时，已结束本次子进程。日志：" + logfile);
     CheckCancel(stop);
