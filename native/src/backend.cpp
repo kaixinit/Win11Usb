@@ -351,6 +351,14 @@ class NativeBackend final : public Backend {
         auto held = ReadDisk(r.disk.path, r.disk.pnp);
         if (!SameIdentity(r.disk, held) || held.layout != r.disk.layout)
             throw Error(L"清盘前最后一次整盘复核失败。");
+        CREATE_DISK create{};
+        create.PartitionStyle = PARTITION_STYLE_MBR;
+        GUID diskId{};
+        if (FAILED(CoCreateGuid(&diskId)))
+            throw Error(L"无法生成新磁盘标识，尚未清盘。");
+        create.Mbr.Signature = diskId.Data1;
+        if (!create.Mbr.Signature)
+            create.Mbr.Signature = 0x57555342;
         for (auto &v : old)
             for (auto &path : v.paths)
                 if (!DeleteVolumeMountPointW(path.c_str()))
@@ -360,29 +368,20 @@ class NativeBackend final : public Backend {
             h.log(L"删除磁盘 " + std::to_wstring(r.disk.number) + L" 的全部旧分区…");
         Io(disk, IOCTL_DISK_DELETE_DRIVE_LAYOUT);
         locks.clear();
-        Io(disk, IOCTL_DISK_UPDATE_PROPERTIES);
-        auto clear = ReadDisk(r.disk.path, r.disk.pnp);
-        uint64_t clearedAt = GetTickCount64();
-        while (SameIdentity(r.disk, clear) && !clear.partitions.empty() &&
-               GetTickCount64() - clearedAt < 10000) {
+        DiskRebuildOps rebuild;
+        rebuild.read = [&](bool includeLayout) { return ReadDisk(r.disk.path, r.disk.pnp, includeLayout); };
+        rebuild.refresh = [&] { Io(disk, IOCTL_DISK_UPDATE_PROPERTIES); };
+        rebuild.initialize = [&](DWORD signature) {
+            SourceChecks(r, p);
             CheckCancel(stop);
-            Sleep(100);
-            Io(disk, IOCTL_DISK_UPDATE_PROPERTIES);
-            clear = ReadDisk(r.disk.path, r.disk.pnp);
-        }
-        if (!SameIdentity(r.disk, clear) || !clear.partitions.empty())
-            throw Error(L"清盘核验失败，未建立新分区。"); // Some USB controllers report MBR with zero entries
-                                                          // after delete; RAW is not required.
+            create.Mbr.Signature = signature;
+            Io(disk, IOCTL_DISK_CREATE_DISK, &create, sizeof create);
+        };
+        InitializeEmptyMbr(r.disk, create.Mbr.Signature, rebuild, h, stop);
         CheckCancel(stop);
-        CREATE_DISK create{};
-        create.PartitionStyle = PARTITION_STYLE_MBR;
-        GUID diskId{};
-        if (FAILED(CoCreateGuid(&diskId)))
-            throw Error(L"无法生成新磁盘标识。");
-        create.Mbr.Signature = diskId.Data1;
-        if (!create.Mbr.Signature)
-            create.Mbr.Signature = 0x57555342;
-        Io(disk, IOCTL_DISK_CREATE_DISK, &create, sizeof create);
+        SourceChecks(r, p);
+        if (h.log)
+            h.log(L"空 MBR 和原 U 盘身份已核验，建立一个全容量新分区…");
         std::vector<BYTE> buffer(FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry) +
                                  4 * sizeof(PARTITION_INFORMATION_EX));
         auto layout = (DRIVE_LAYOUT_INFORMATION_EX *)buffer.data();
@@ -401,6 +400,7 @@ class NativeBackend final : public Backend {
         part.Mbr.BootIndicator = TRUE;
         part.Mbr.RecognizedPartition = TRUE;
         part.Mbr.HiddenSectors = (DWORD)(partitionOffset / r.disk.sector);
+        CheckCancel(stop);
         Io(disk, IOCTL_DISK_SET_DRIVE_LAYOUT_EX, layout, (DWORD)buffer.size());
         Io(disk, IOCTL_DISK_UPDATE_PROPERTIES);
         disk.reset();

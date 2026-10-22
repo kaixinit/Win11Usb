@@ -1,0 +1,8 @@
+native/src/disk.cpp:72:6: warning: unused function 'IsEfi' [-Wunused-function]
+   72 | bool IsEfi(const Partition &p) {
+      |      ^~~~~
+1 warning generated.
+native/src/ui.cpp:165:39: warning: missing field 'rcMonitor' initializer [-Wmissing-field-initializers]
+  165 |     MONITORINFO monitor{sizeof monitor};
+      |                                       ^
+1 warning generated.

@@ -385,6 +385,333 @@ void StorageCompatibilityTests() {
             "unknown device state stops before preparation or formatting");
     std::cout << "PASS USB ancestry, variable-length storage headers, partial-query safety and diagnostics\n";
 }
+void LayoutReadTests() {
+    const size_t header = FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry);
+    std::vector<BYTE> bytes(header + 4 * sizeof(PARTITION_INFORMATION_EX));
+    auto layout = (DRIVE_LAYOUT_INFORMATION_EX *)bytes.data();
+    layout->PartitionStyle = PARTITION_STYLE_MBR;
+    layout->Mbr.Signature = 123456;
+    layout->PartitionCount = 4;
+    Disk d;
+    d.size = 64 * GiB;
+    // Unused entries may contain stale lengths. A type-zero slot is not a partition.
+    layout->PartitionEntry[0].PartitionLength.QuadPart = d.size;
+    ParseDriveLayout(d, bytes);
+    Require(d.layoutKnown && d.partitions.empty() && d.layoutEntries == 4 && d.tableId == L"123456",
+            "production layout parser recognizes unused MBR slots with stale lengths");
+    auto &p = layout->PartitionEntry[0];
+    p.PartitionStyle = PARTITION_STYLE_MBR;
+    p.Mbr.PartitionType = 0x0c;
+    p.StartingOffset.QuadPart = MiB;
+    p.PartitionLength.QuadPart = d.size - 2 * MiB;
+    p.PartitionNumber = 1;
+    ParseDriveLayout(d, bytes);
+    Require(d.partitions.size() == 1 && d.partitions[0].offset == MiB,
+            "production parser preserves a real MBR partition");
+    p.StartingOffset.QuadPart = -1;
+    Reject([&] { ParseDriveLayout(d, bytes); }, "negative actual partition offset is not silently empty");
+    Require(!d.layoutKnown && d.partitions.empty(), "failed parser never leaves a verified layout");
+    p.StartingOffset.QuadPart = d.size;
+    Reject([&] { ParseDriveLayout(d, bytes); }, "out-of-disk actual partition extent rejected");
+    layout->PartitionCount = 5;
+    Reject([&] { ParseDriveLayout(d, bytes); }, "truncated partition array rejected");
+    layout->PartitionCount = 0;
+    bytes.resize(header);
+    ParseDriveLayout(d, bytes);
+    Require(d.layoutKnown && d.style == PARTITION_STYLE_MBR && d.partitions.empty(),
+            "empty MBR accepts exactly its header without placeholder partition");
+    layout = (DRIVE_LAYOUT_INFORMATION_EX *)bytes.data();
+    layout->PartitionStyle = PARTITION_STYLE_RAW;
+    ParseDriveLayout(d, bytes);
+    Require(d.layoutKnown && d.style == PARTITION_STYLE_RAW && d.partitions.empty(),
+            "raw zero-entry disk remains readable");
+    layout->PartitionStyle = (PARTITION_STYLE)99;
+    Reject([&] { ParseDriveLayout(d, bytes); }, "unknown disk layout style rejected");
+    bytes.resize(header - 1);
+    Reject([&] { ParseDriveLayout(d, bytes); }, "short layout header rejected");
+    bytes.assign(header + sizeof(PARTITION_INFORMATION_EX), 0);
+    layout = (DRIVE_LAYOUT_INFORMATION_EX *)bytes.data();
+    layout->PartitionStyle = PARTITION_STYLE_GPT;
+    layout->PartitionCount = 1;
+    auto &gpt = layout->PartitionEntry[0];
+    gpt.PartitionStyle = PARTITION_STYLE_GPT;
+    gpt.PartitionLength.QuadPart = d.size;
+    ParseDriveLayout(d, bytes);
+    Require(d.layoutKnown && d.partitions.empty(), "zero GPT type denotes unused slot");
+    std::cout << "PASS actual partition-buffer parsing, empty MBR/RAW and unused slots\n";
+}
+struct RebuildFixture {
+    Disk expected;
+    DWORD signature = 987654;
+    uint64_t tick = 0;
+    unsigned identityReads = 0, layoutReads = 0, initializations = 0, refreshes = 0;
+    bool newPartition = false;
+    std::atomic<bool> stop{false};
+    std::wstring messages;
+    DiskRebuildOps ops;
+    Hooks hooks;
+    RebuildFixture() {
+        expected.number = 3;
+        expected.size = 64 * GiB;
+        expected.sector = 512;
+        expected.path = L"fixture-only-interface";
+        expected.pnp = L"USBSTOR\\FIXTURE-ONLY";
+        expected.friendly = L"TEST USB";
+        expected.serial = L"private-fixture-serial";
+        expected.bootKnown = true;
+        expected.style = PARTITION_STYLE_MBR;
+        expected.tableId = L"111";
+        Partition p;
+        p.number = 1;
+        p.offset = MiB;
+        p.size = expected.size - 2 * MiB;
+        p.mbrType = 0x0c;
+        expected.partitions.push_back(p);
+        ops.now = [&] { return tick; };
+        ops.wait = [&](DWORD ms) { tick += ms; };
+        ops.refresh = [&] { refreshes++; };
+        ops.read = [&](bool layout) {
+            if (layout) {
+                layoutReads++;
+                if (!initializations)
+                    throw Error(L"test: raw layout query before initialization");
+            } else
+                identityReads++;
+            return Snapshot(layout);
+        };
+        ops.initialize = [&](DWORD value) {
+            if (value != signature || identityReads < 2)
+                throw Error(L"test: initialization before verified identity");
+            initializations++;
+        };
+        hooks.log = [&](const std::wstring &s) { messages += s + L"\n"; };
+    }
+    Disk Snapshot(bool layout) const {
+        auto d = expected;
+        d.partitions.clear();
+        d.style = layout ? PARTITION_STYLE_MBR : PARTITION_STYLE_RAW;
+        d.layoutKnown = layout;
+        d.tableId = layout ? std::to_wstring(signature) : L"";
+        return d;
+    }
+    Disk Run() {
+        auto d = InitializeEmptyMbr(expected, signature, ops, hooks, stop);
+        // Represents the caller's subsequent SET_DRIVE_LAYOUT_EX; never reached on failure.
+        newPartition = true;
+        return d;
+    }
+};
+void RebuildTests(const std::wstring &root) {
+    {
+        RebuildFixture f;
+        auto d = f.Run();
+        Require(f.initializations == 1 && f.identityReads == 2 && f.layoutReads == 2 && f.newPartition &&
+                    d.partitions.empty() && d.tableId == std::to_wstring(f.signature),
+                "shared production sequence initializes before querying raw layout and verifies empty MBR");
+        Require(f.messages.find(f.expected.serial) == f.messages.npos &&
+                    f.messages.find(f.expected.pnp) == f.messages.npos,
+                "rebuild logs omit raw serial and PnP identifiers");
+        WriteUtf8(root + L"\\rebuild-normal.log", f.messages);
+    }
+    {
+        RebuildFixture f;
+        f.ops.read = [&](bool layout) {
+            if (layout)
+                f.layoutReads++;
+            else
+                f.identityReads++;
+            auto d = f.Snapshot(layout);
+            if (!layout && f.identityReads <= 3) {
+                d.descriptorKnown = false;
+                d.friendly = L"temporary device-node fallback name";
+                d.probeErrors.push_back(L"device descriptor temporarily unavailable (21)");
+            }
+            if (layout && f.layoutReads <= 3) {
+                d.layoutKnown = false;
+                d.probeErrors.push_back(L"layout temporarily unavailable (21)");
+            }
+            return d;
+        };
+        f.Run();
+        Require(f.identityReads == 5 && f.layoutReads == 5 && f.initializations == 1,
+                "incomplete identity and layout observations retry and require two consecutive good reads");
+        Require(f.messages.find(L"查询错误") != f.messages.npos, "transient probe reasons reach saved logs");
+    }
+    {
+        RebuildFixture f;
+        f.ops.read = [&](bool layout) {
+            if (!layout) {
+                f.identityReads++;
+                return f.Snapshot(false);
+            }
+            f.layoutReads++;
+            if (f.layoutReads == 1)
+                return f.expected; // Complete, but stale old signature and partition.
+            auto d = f.Snapshot(true);
+            if (f.layoutReads == 2)
+                d.tableId = L"111";
+            if (f.layoutReads == 3)
+                d.partitions = f.expected.partitions;
+            return d;
+        };
+        f.Run();
+        Require(f.layoutReads == 5 && f.initializations == 1,
+                "old cached signature and remaining actual partitions never permit a new partition");
+    }
+    for (bool afterInitialize : {false, true})
+        for (int change = 0; change < 9; change++) {
+            RebuildFixture f;
+            f.ops.read = [&](bool layout) {
+                if (!layout)
+                    f.identityReads++;
+                auto d = f.Snapshot(layout);
+                if (layout == afterInitialize) {
+                    switch (change) {
+                    case 0:
+                        d.number++;
+                        break;
+                    case 1:
+                        d.size -= MiB;
+                        break;
+                    case 2:
+                        d.sector = 4096;
+                        break;
+                    case 3:
+                        d.path = L"other interface";
+                        break;
+                    case 4:
+                        d.pnp = L"other device";
+                        break;
+                    case 5:
+                        d.serial = L"other serial";
+                        break;
+                    case 6:
+                        d.friendly = L"other model";
+                        break;
+                    case 7:
+                        d.readOnly = true;
+                        break;
+                    case 8:
+                        d.offline = true;
+                        break;
+                    }
+                    // A known conflict must abort even if another query is incomplete.
+                    d.layoutKnown = false;
+                    d.probeErrors.push_back(L"unrelated incomplete query");
+                }
+                return d;
+            };
+            Reject([&] { f.Run(); }, "known device conflict aborts instead of retrying into another write");
+            Require(!f.newPartition && f.initializations == (afterInitialize ? 1u : 0u) &&
+                        f.tick == (afterInitialize ? 200u : 0u),
+                    "device conflict stops immediately before any subsequent write");
+        }
+    {
+        RebuildFixture f;
+        f.ops.read = [&](bool layout) {
+            auto d = f.Snapshot(layout);
+            d.descriptorKnown = false;
+            d.probeErrors.push_back(L"persistent descriptor failure (21)");
+            return d;
+        };
+        std::wstring error;
+        try {
+            f.Run();
+        } catch (const Error &e) {
+            error = e.text;
+        }
+        Require(!f.newPartition && !f.initializations && f.tick == 30000 &&
+                    error.find(L"persistent descriptor failure (21)") != error.npos,
+                "persistent incomplete identity times out without initializing and preserves exact error");
+        WriteUtf8(root + L"\\rebuild-timeout.log", f.messages);
+    }
+    for (bool raw : {false, true}) {
+        RebuildFixture f;
+        f.ops.read = [&](bool layout) {
+            if (!layout)
+                f.identityReads++;
+            auto d = f.Snapshot(layout);
+            if (layout) {
+                d.style = raw ? PARTITION_STYLE_RAW : PARTITION_STYLE_MBR;
+                d.tableId = raw ? L"" : L"wrong-signature";
+            }
+            return d;
+        };
+        Reject([&] { f.Run(); }, "post-initialize raw or wrong-signature layout is never accepted");
+        Require(f.initializations == 1 && !f.newPartition && f.tick == 30200,
+                "empty-MBR timeout never retries initialization or establishes a partition");
+    }
+    {
+        RebuildFixture f;
+        f.ops.refresh = [&] {
+            if (++f.refreshes < 4)
+                throw Error(L"refresh temporarily busy (170)");
+        };
+        f.Run();
+        Require(f.refreshes == 7 && f.initializations == 1 &&
+                    f.messages.find(L"refresh temporarily busy (170)") != f.messages.npos,
+                "refresh failure retries without allowing a write until successful refresh and identity");
+    }
+    {
+        RebuildFixture f;
+        f.ops.refresh = [] { throw Error(L"refresh not available (1)"); };
+        Reject([&] { f.Run(); }, "persistent refresh failure cannot be silently ignored");
+        Require(!f.initializations && !f.newPartition && f.tick == 30000,
+                "refresh failure is bounded and prevents all following writes");
+    }
+    {
+        RebuildFixture f;
+        f.ops.read = [&](bool layout) {
+            if (!layout)
+                f.identityReads++;
+            else if (++f.layoutReads < 31)
+                throw Error(L"device temporarily not ready (21)");
+            return f.Snapshot(layout);
+        };
+        f.Run();
+        Require(f.layoutReads == 32 && f.tick < 10000 && f.messages.find(L"5 秒") != f.messages.npos,
+                "throwing driver query recovers and logs a five-second heartbeat");
+    }
+    for (bool afterInitialize : {false, true}) {
+        RebuildFixture f;
+        if (afterInitialize)
+            f.ops.initialize = [&](DWORD) {
+                f.initializations++;
+                f.stop = true;
+            };
+        else
+            f.ops.wait = [&](DWORD ms) {
+                f.tick += ms;
+                f.stop = true;
+            };
+        bool cancelled = false;
+        try {
+            f.Run();
+        } catch (const Cancelled &) {
+            cancelled = true;
+        }
+        Require(cancelled && !f.newPartition && f.initializations == (afterInitialize ? 1u : 0u),
+                "cancel before/after MBR initialization prevents any further partition creation");
+    }
+    {
+        RebuildFixture f;
+        f.ops.initialize = [&](DWORD) {
+            f.initializations++;
+            throw Error(L"initialize denied (5)");
+        };
+        Reject([&] { f.Run(); }, "failed disk initialization is not retried or bypassed");
+        Require(f.initializations == 1 && !f.layoutReads && !f.newPartition,
+                "initialization failure prevents later layout queries and partition writes");
+    }
+    {
+        RebuildFixture f;
+        f.expected.bootKnown = false;
+        Reject([&] { f.Run(); }, "missing initial boot-disk mapping refuses initialization");
+        Require(!f.initializations && !f.refreshes,
+                "invalid starting identity fails before device operations");
+    }
+    std::cout << "PASS shared disk rebuild sequence: identity, empty MBR, driver delays, abort and timeout\n";
+}
 void SnapshotTests() {
     Disk a;
     a.number = 3;
@@ -940,6 +1267,8 @@ int wmain(int argc, wchar_t **argv) {
         WorkflowTests();
         SnapshotTests();
         StorageCompatibilityTests();
+        LayoutReadTests();
+        RebuildTests(root);
         XmlTests();
         FileTests(root);
         WimReadTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");

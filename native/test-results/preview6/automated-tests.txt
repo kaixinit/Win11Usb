@@ -1,0 +1,17 @@
+PASS 39 unchanged legacy image identity cases
+PASS size boundary, image and SWM preflight
+PASS full FAT32/NTFS state machine, prompts and injected failures
+PASS physical identity and partition snapshot guards
+PASS USB ancestry, variable-length storage headers, partial-query safety and diagnostics
+PASS actual partition-buffer parsing, empty MBR/RAW and unused slots
+PASS shared disk rebuild sequence: identity, empty MBR, driver delays, abort and timeout
+PASS native WIM metadata parsing
+PASS actual native file copy, Unicode paths, size verification, cancellation
+PASS real read-only WIMGAPI fixture, Unicode task scratch, invalid scratch and missing TEMP
+PASS production task WIM preflight from absent scratch through actual volume checks and WIMGAPI
+PASS actual task directory pins, DISM scratch, strict SWM cleanup and partition readiness
+PASS six-stage FAT32/NTFS file integration; format, DISM data and eject are test doubles
+NOT RUN WIM capture roundtrip: requires administrator backup privilege; use --wim-roundtrip
+PASS actual native process argv, timeout and owned-job cancellation
+PASS real NTFS junction replacement and cleanup scope guard
+PASS 334 assertions; no physical disks were written

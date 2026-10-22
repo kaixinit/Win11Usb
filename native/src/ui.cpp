@@ -376,7 +376,7 @@ struct Ui {
         dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetSaveFileNameW(&dialog))
             return;
-        std::wstring report = L"Win11Usb 0.2.0-preview.5 — 设备识别诊断\r\n";
+        std::wstring report = L"Win11Usb 0.2.0-preview.6 — 设备识别诊断\r\n";
         report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
                          : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
         report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +

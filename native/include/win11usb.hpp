@@ -90,14 +90,16 @@ struct Disk {
     DWORD number = 0, sector = 0, style = PARTITION_STYLE_RAW;
     uint64_t size = 0;
     bool offline = false, readOnly = false, system = false, bootKnown = false;
-    bool numberKnown = true, capacityKnown = true, attributesKnown = true, layoutKnown = true;
-    DWORD reportedBus = 0;
+    bool descriptorKnown = true, numberKnown = true, capacityKnown = true, attributesKnown = true,
+         layoutKnown = true;
+    DWORD reportedBus = 0, layoutEntries = 0;
     std::wstring friendly, serial, pnp, path, layout, blocked, tableId, usbEvidence;
     std::vector<std::wstring> probeErrors;
     std::vector<Partition> partitions;
     std::vector<std::wstring> letters;
     bool complete() const {
-        return numberKnown && capacityKnown && attributesKnown && layoutKnown && probeErrors.empty();
+        return descriptorKnown && numberKnown && capacityKnown && attributesKnown && layoutKnown &&
+               probeErrors.empty();
     }
     bool eligible() const { return complete() && blocked.empty(); }
     std::wstring Metadata() const;
@@ -120,9 +122,10 @@ struct Catalog {
 bool IsUsbStorage(DWORD reportedBus, const std::vector<std::wstring> &deviceAncestors);
 void ParseDiskGeometry(Disk &disk, const std::vector<BYTE> &bytes);
 void ParseStorageDescriptor(Disk &disk, const std::vector<BYTE> &bytes);
+void ParseDriveLayout(Disk &disk, const std::vector<BYTE> &bytes);
 std::vector<Volume> ReadVolumes();
 Catalog ReadDisks();
-Disk ReadDisk(const std::wstring &path, const std::wstring &pnp = L"");
+Disk ReadDisk(const std::wstring &path, const std::wstring &pnp = L"", bool includeLayout = true);
 Disk RecheckDisk(const Disk &expected, bool checkLayout);
 std::vector<DWORD> PathDisks(const std::wstring &path);
 void AssertOutside(const std::wstring &path, const Disk &target, const std::wstring &purpose);

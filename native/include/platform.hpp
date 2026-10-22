@@ -48,6 +48,17 @@ std::vector<std::wstring> PrepareSplitArguments(const Prepared &prepared, TaskWo
 std::vector<std::wstring> PrepareImageInfoArguments(const Prepared &prepared, TaskWorkspace &workspace);
 uint64_t PlannedPartitionSize(const Disk &disk);
 bool CreatedPartitionReady(const Disk &disk, uint64_t offset, uint64_t size);
+// Production and tests use the same bounded initialization/verification sequence.
+// Only the caller's retained whole-disk handle may initialize or refresh the disk.
+struct DiskRebuildOps {
+    std::function<Disk(bool includeLayout)> read;
+    std::function<void()> refresh;
+    std::function<void(DWORD signature)> initialize;
+    std::function<uint64_t()> now;
+    std::function<void(DWORD milliseconds)> wait;
+};
+Disk InitializeEmptyMbr(const Disk &expected, DWORD signature, const DiskRebuildOps &ops, const Hooks &hooks,
+                        std::atomic<bool> &stop);
 std::vector<File> ListFiles(const std::wstring &root, std::atomic<bool> &stop);
 ImageIdentity ReadWimIdentity(const std::wstring &image, const std::wstring &iso, const std::wstring &scratch,
                               const Hooks &hooks = {});

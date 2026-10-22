@@ -96,6 +96,7 @@ void ParseStorageDescriptor(Disk &d, const std::vector<BYTE> &bytes) {
     if (!name.empty())
         d.friendly = name;
     d.serial = DescriptorText(bytes, sd->SerialNumberOffset);
+    d.descriptorKnown = true;
 }
 void ParseDiskGeometry(Disk &d, const std::vector<BYTE> &bytes) {
     if (bytes.size() < FIELD_OFFSET(DISK_GEOMETRY_EX, Data))
@@ -123,6 +124,62 @@ std::wstring LayoutSignature(const Disk &d) {
     }
     return s;
 }
+void ParseDriveLayout(Disk &d, const std::vector<BYTE> &bytes) {
+    d.layoutKnown = false;
+    d.layoutEntries = 0;
+    d.partitions.clear();
+    d.tableId.clear();
+    const size_t header = FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry);
+    if (bytes.size() < header)
+        throw Error(L"分区信息不完整。");
+    auto l = (const DRIVE_LAYOUT_INFORMATION_EX *)bytes.data();
+    if (l->PartitionStyle != PARTITION_STYLE_MBR && l->PartitionStyle != PARTITION_STYLE_GPT &&
+        l->PartitionStyle != PARTITION_STYLE_RAW)
+        throw Error(L"分区表类型无效。");
+    d.style = l->PartitionStyle;
+    d.layoutEntries = l->PartitionCount;
+    if (l->PartitionCount > (bytes.size() - header) / sizeof(PARTITION_INFORMATION_EX))
+        throw Error(L"分区计数超出返回数据范围。");
+    if (d.style == PARTITION_STYLE_MBR)
+        d.tableId = std::to_wstring(l->Mbr.Signature);
+    else if (d.style == PARTITION_STYLE_GPT) {
+        wchar_t id[40];
+        StringFromGUID2(l->Gpt.DiskId, id, 40);
+        d.tableId = id;
+    }
+    std::vector<Partition> partitions;
+    for (DWORD i = 0; i < l->PartitionCount; i++) {
+        const auto &p = l->PartitionEntry[i];
+        // GET_DRIVE_LAYOUT_EX includes unused slots. Their type, rather than
+        // leftover length/offset bytes, determines whether they are partitions.
+        if (p.PartitionStyle == PARTITION_STYLE_MBR && p.Mbr.PartitionType == PARTITION_ENTRY_UNUSED)
+            continue;
+        if (p.PartitionStyle == PARTITION_STYLE_GPT && IsEqualGUID(p.Gpt.PartitionType, GUID_NULL))
+            continue;
+        if (p.PartitionLength.QuadPart == 0)
+            continue;
+        if (p.PartitionStyle != l->PartitionStyle || d.style == PARTITION_STYLE_RAW ||
+            p.PartitionLength.QuadPart < 0 || p.StartingOffset.QuadPart < 0)
+            throw Error(L"分区类型、偏移或长度无效。");
+        Partition v;
+        v.number = p.PartitionNumber;
+        v.offset = p.StartingOffset.QuadPart;
+        v.size = p.PartitionLength.QuadPart;
+        if (d.capacityKnown && (v.offset > d.size || v.size > d.size - v.offset))
+            throw Error(L"分区范围超出物理磁盘容量。");
+        if (d.style == PARTITION_STYLE_MBR) {
+            v.mbrType = p.Mbr.PartitionType;
+            v.active = p.Mbr.BootIndicator;
+        } else {
+            v.gptId = p.Gpt.PartitionId;
+            v.gptType = p.Gpt.PartitionType;
+        }
+        partitions.push_back(v);
+    }
+    d.partitions = std::move(partitions);
+    d.layout = LayoutSignature(d);
+    d.layoutKnown = true;
+}
 bool SameIdentity(const Disk &a, const Disk &b) {
     return a.complete() && b.complete() && a.number == b.number && a.size == b.size && a.sector == b.sector &&
            !a.path.empty() && Lower(a.path) == Lower(b.path) && !a.pnp.empty() &&
@@ -140,12 +197,12 @@ std::wstring Disk::Metadata() const {
            (ls.empty() ? L"盘符未确认 / 未分配" : ls) + L" · " +
            (layoutKnown ? L"当前 " + std::to_wstring(partitions.size()) + L" 个分区" : L"分区数未确认");
 }
-Disk ReadDisk(const std::wstring &path, const std::wstring &pnp) {
+Disk ReadDisk(const std::wstring &path, const std::wstring &pnp, bool includeLayout) {
     Disk d;
     d.path = path;
     d.pnp = pnp;
     d.number = MAXDWORD;
-    d.numberKnown = d.capacityKnown = d.attributesKnown = d.layoutKnown = false;
+    d.descriptorKnown = d.numberKnown = d.capacityKnown = d.attributesKnown = d.layoutKnown = false;
     d.friendly = NodeName(pnp);
     auto ancestors = Ancestors(pnp);
     bool nodeUsb = IsUsbStorage(BusTypeUnknown, ancestors);
@@ -242,42 +299,8 @@ Disk ReadDisk(const std::wstring &path, const std::wstring &pnp) {
         d.readOnly = (a.Attributes & DISK_ATTRIBUTE_READ_ONLY) != 0;
         d.attributesKnown = true;
     });
-    probe(L"分区布局", [&] {
-        auto lb = query(IOCTL_DISK_GET_DRIVE_LAYOUT_EX, 1024 * 1024);
-        if (lb.size() < FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry))
-            throw Error(L"分区信息不完整。");
-        auto l = (DRIVE_LAYOUT_INFORMATION_EX *)lb.data();
-        d.style = l->PartitionStyle;
-        if (d.style == PARTITION_STYLE_MBR)
-            d.tableId = std::to_wstring(l->Mbr.Signature);
-        else if (d.style == PARTITION_STYLE_GPT) {
-            wchar_t id[40];
-            StringFromGUID2(l->Gpt.DiskId, id, 40);
-            d.tableId = id;
-        }
-        if (l->PartitionCount > (lb.size() - FIELD_OFFSET(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry)) /
-                                    sizeof(PARTITION_INFORMATION_EX))
-            throw Error(L"分区计数超出返回数据范围。");
-        for (DWORD i = 0; i < l->PartitionCount; i++) {
-            auto &p = l->PartitionEntry[i];
-            if (p.PartitionLength.QuadPart <= 0 || p.StartingOffset.QuadPart < 0)
-                continue;
-            Partition v;
-            v.number = p.PartitionNumber;
-            v.offset = p.StartingOffset.QuadPart;
-            v.size = p.PartitionLength.QuadPart;
-            if (p.PartitionStyle == PARTITION_STYLE_MBR) {
-                v.mbrType = p.Mbr.PartitionType;
-                v.active = p.Mbr.BootIndicator;
-            } else if (p.PartitionStyle == PARTITION_STYLE_GPT) {
-                v.gptId = p.Gpt.PartitionId;
-                v.gptType = p.Gpt.PartitionType;
-            }
-            d.partitions.push_back(v);
-        }
-        d.layout = LayoutSignature(d);
-        d.layoutKnown = true;
-    });
+    if (includeLayout)
+        probe(L"分区布局", [&] { ParseDriveLayout(d, query(IOCTL_DISK_GET_DRIVE_LAYOUT_EX, 1024 * 1024)); });
     return d;
 }
 std::vector<Volume> ReadVolumes() {
@@ -485,7 +508,7 @@ Disk RecheckDisk(const Disk &expected, bool layout) {
 std::wstring DiskJson(const Catalog &c) {
     std::wstring s = L"{\"implementation\":\"C++/"
                      L"Win32\",\"read_only\":true,\"dotnet_required\":false,\"powershell_required\":false,"
-                     L"\"application_version\":\"0.2.0-preview.5\",\"administrator\":" +
+                     L"\"application_version\":\"0.2.0-preview.6\",\"administrator\":" +
                      std::wstring(IsAdmin() ? L"true" : L"false") + L",\"interface_count\":" +
                      std::to_wstring(c.interfaces) + L",\"non_usb_count\":" + std::to_wstring(c.nonUsb) +
                      L",\"failed_interface_count\":" + std::to_wstring(c.failed) +
@@ -500,7 +523,9 @@ std::wstring DiskJson(const Catalog &c) {
              Json(d.friendly) + L",\"size_bytes\":" + (d.capacityKnown ? std::to_wstring(d.size) : L"null") +
              L",\"logical_sector\":" + (d.capacityKnown ? std::to_wstring(d.sector) : L"null") +
              L",\"partition_count\":" + (d.layoutKnown ? std::to_wstring(d.partitions.size()) : L"null") +
-             L",\"layout_known\":" + (d.layoutKnown ? L"true" : L"false") + L",\"attributes_known\":" +
+             L",\"layout_entries\":" + std::to_wstring(d.layoutEntries) + L",\"layout_known\":" +
+             (d.layoutKnown ? L"true" : L"false") + L",\"descriptor_known\":" +
+             (d.descriptorKnown ? L"true" : L"false") + L",\"attributes_known\":" +
              (d.attributesKnown ? L"true" : L"false") + L",\"eligible\":" +
              (d.eligible() ? L"true" : L"false") + L",\"blocked_reason\":" + Json(d.blocked) +
              L",\"summary\":" + Json(d.Metadata()) + L",\"reported_bus\":" + std::to_wstring(d.reportedBus) +
