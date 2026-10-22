@@ -4,7 +4,9 @@ A portable Windows desktop tool for turning a local Windows ISO into installatio
 
 [中文](README.md) · [Validation](docs/VALIDATION.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
-**0.1.0-beta.3 is a pre-release candidate.** Creating media deletes all partitions and files on the selected USB disk. Back up first and verify its disk number, model and capacity.
+**0.1.0-beta.3 is a pre-release.** Creating media deletes all partitions and files on the selected USB disk. Back up first and verify its disk number, model and capacity.
+
+[Download beta.3](https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3) · [Report an issue](https://github.com/kaixinit/Win11Usb/issues)
 
 The C# entry point now creates the existing WPF interface directly, preserving the worker and media-creation engine. The user reports that beta.3 opened and completed a FAT32 / large-WIM job without antivirus alerts on the previously affected computer. Eleven local regression suites passed. This does not establish universal antivirus or firmware compatibility; see [validation and the redacted log](docs/VALIDATION.md). Older beta.1 and beta.2 packages are withdrawn.
 

@@ -4,7 +4,9 @@
 
 [English](README.en.md) · [使用与常见问题](docs/FAQ.md) · [验证范围](docs/VALIDATION.md) · [发布说明](docs/RELEASE_NOTES.md)
 
-当前版本：**0.1.0-beta.3 · 预发布候选**。运行前请阅读下方制作说明和验证范围。
+当前版本：**0.1.0-beta.3 · 预发布**。运行前请阅读下方制作说明和验证范围。
+
+[下载 beta.3](https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3) · [问题反馈](https://github.com/kaixinit/Win11Usb/issues)
 
 beta.3 改由 C# 直接启动 WPF 界面，保留现有制作引擎。用户已在此前报毒的电脑上完成一次 FAT32 大 WIM 制作，并反馈全程未报毒；本地 11 组回归也已通过。验证范围、脱敏实测日志及旧版检测记录见 [验证记录](docs/VALIDATION.md)。旧 beta.1 / beta.2 已撤回，不再作为下载版本。
 

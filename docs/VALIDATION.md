@@ -1,6 +1,6 @@
 # 0.1.0-beta.3 验证记录
 
-更新日期：2026-10-22。状态：本地 Pre-release 材料准备，不代表已经发布到 GitHub。用户已在原报毒电脑完成一次 FAT32 大 WIM 制作，反馈全程未报毒，并提供完整日志与完成截图。此结论限于下述证据范围。
+更新日期：2026-10-22。此文记录 Pre-release 的验证范围；公开发布状态以 [GitHub Releases](https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3) 为准。用户已在原报毒电脑完成一次 FAT32 大 WIM 制作，反馈全程未报毒，并提供完整日志与完成截图。此结论限于下述证据范围。
 
 ## 文件与保留范围
 
@@ -34,6 +34,10 @@
 17 个场景：DirectFAT32、SplitFAT32、SplitNTFS、CancelFormat、CorruptCopy、CopyFailure、MissingBoot、BadImage、MountFailure、AlreadyMounted、ExistingMountFailure、EjectVeto、KeepMedia、KeepSwm、CleanupFailure、NoMatchingIso、UnknownPrompt。
 
 原生检查还覆盖开始前复制设备快照、1001 条尾部消息收取、长确认文本、NTFS 固定提醒、未知请求取消、限时停止。测试原始结果留在 tests/artifacts，不进入源码包。发布源码包解压到含空格的干净目录后重新构建，全部 11 组测试通过；运行包与源码包的必要文件、文档链接、脱敏和内外 SHA-256 清单均已核对。未宣称不同构建的 EXE 字节完全一致。
+
+## GitHub Actions
+
+2026-10-22，在 Windows Server 2022 托管运行器完成构建、全部 11 组回归及打包，见 [成功运行记录](https://github.com/kaixinit/Win11Usb/actions/runs/39734318055)，对应提交 cc0b22db360998de961def62a399773aa934c441。首次远程运行的旧式 cmd 输入样例受到 UTF-8 BOM 影响；已在样例内指定无 BOM 输入编码并恢复原编码，复测通过。此改动仅涉及测试，不修改正式 EXE、Worker 或 Engine。CI 重建文件用于验证，不替换实测通过的发布 EXE。
 
 ## 实际窗口检查
 
@@ -72,6 +76,5 @@ README 配图为示例数据的实际预览窗口，不当作实机制作成功�
 - NTFS 实机、大于 32 GB FAT32 兼容工具分支、小 WIM 实机、多分区 PE 盘的当前版本复测。
 - Windows 10、100%/125%/150% DPI、小工作区与完整辅助技术矩阵。
 - UAC 取消、真实存储驱动阻塞和热拔插过程的中断恢复。
-- GitHub Actions 远程运行；目前仅准备配置并核对固定 action 提交存在，未运行远程工作流。
 
-当前适合先作为 Pre-release 候选评审，不作全硬件兼容或安全认证承诺。尚未创建 GitHub 仓库、上传代码或发布 Release。
+当前按 Pre-release 使用，不作全硬件兼容或安全认证承诺。源码、版本附件与后续状态见上述 GitHub 仓库和 Releases 页面。

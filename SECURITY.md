@@ -2,7 +2,7 @@
 
 旧 beta.2 曾在启动时被 Defender 以 `Behavior:Win32/DefenseEvasion.A!ml` 隔离，旧 beta.1 / beta.2 已撤回。beta.3 改为原生 WPF 启动后，用户在原报错电脑报告正常启动、完成 FAT32 大 WIM 制作且全程未报毒；经脱敏的日志与本地验证见 [验证记录](docs/VALIDATION.md)。没有获得 Microsoft 对旧版的误报认定，也不把该次通过作为所有环境的安全保证。请勿恢复旧版隔离文件继续使用。
 
-当前为测试版本。涉及误选磁盘、身份复核绕过或异常继续清盘的问题，请优先通过 GitHub 私密漏洞报告联系维护者（仓库需先启用该功能）；不要公开含个人路径、序列号、账号或令牌的原始日志。
+当前为测试版本。涉及误选磁盘、身份复核绕过或异常继续清盘的问题，请优先通过 [GitHub 私密漏洞报告](https://github.com/kaixinit/Win11Usb/security/advisories/new) 联系维护者 kaixinit，仓库已启用该功能；不要公开含个人路径、序列号、账号或令牌的原始日志。
 
 反馈请提供版本、Windows 构建号、出错阶段、已经脱敏的提示及最小复现步骤。普通界面问题可以提交公开 Issue。
 

@@ -34,6 +34,15 @@
     "remote_exe_hash_independently_verified": false,
     "uefi_boot_verified": false
   },
-  "distribution": "local prerelease materials; not uploaded to GitHub",
+  "github_ci": {
+    "result": "success",
+    "runner": "windows-2022",
+    "run_url": "https://github.com/kaixinit/Win11Usb/actions/runs/39734318055",
+    "commit": "cc0b22db360998de961def62a399773aa934c441",
+    "regression_suites_passed": 11,
+    "creation_engine_changed": false,
+    "ci_rebuild_used_as_release_executable": false
+  },
+  "distribution": "prerelease validation record; publication status is listed on GitHub Releases",
   "universal_antivirus_safety_claim": false
 }

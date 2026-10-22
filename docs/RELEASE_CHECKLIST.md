@@ -1,6 +1,6 @@
-# 公开发布前
+# 发布核对记录
 
-当前候选：0.1.0-beta.3。2026-10-22 已核对用户实机日志并记录全程未报毒反馈，可整理本地 Pre-release 材料；尚未上传 GitHub。旧 beta.1 / beta.2 撤回，不随新包分发。
+当前版本：0.1.0-beta.3。2026-10-22 已核对用户实机日志并记录全程未报毒反馈，GitHub 仓库与预发布附件已创建。公开状态以 [Releases 页面](https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3) 为准。旧 beta.1 / beta.2 撤回，不随新包分发。
 
 - [x] 保留用户确认的 EXE 字节，不为发布重新编译；产品版本与 SHA-256 见 VALIDATION.md。
 - [x] 原生 WPF 启动、标准权限清单；原界面 XAML 和制作 Worker/Engine 保留。
@@ -14,9 +14,9 @@
 - [ ] 当前版本的 NTFS、小 WIM、大于 32 GB FAT32、多分区 PE 盘实机矩阵。
 - [ ] Windows 10、不同 DPI 和工作区、完整键盘/辅助技术检查。
 - [ ] UAC 取消、真实驱动阻塞及热拔插验证。
-- [ ] 更新维护者身份，创建仓库并启用 Issues 和私密安全反馈渠道。
-- [ ] 在 GitHub 实际运行 Actions；本地构建成功不等于远程 CI 成功。
-- [ ] 人工核对后上传源码与版本包，标记 Pre-release；不上传工作目录、原始日志或旧 EXE。
+- [x] 维护者 kaixinit；公开仓库已创建，Issues 和私密安全反馈已启用。
+- [x] GitHub Actions Windows 构建、11 组回归及打包通过，记录见 VALIDATION.md。
+- [x] 源码与三个预发布附件已上传并完成下载哈希核对；不上传工作目录、原始日志或旧 EXE。
 
 建议仓库描述：Offline Windows installation USB creator with whole-disk checks, WIM splitting and live progress.
 

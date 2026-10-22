@@ -1,6 +1,6 @@
 # Win11Usb 0.1.0-beta.3
 
-把本地 Windows ISO 制作为安装 U 盘的便携窗口工具。此版本建议先标记为 **Pre-release**。
+把本地 Windows ISO 制作为安装 U 盘的便携窗口工具。此版本为 **Pre-release**。
 
 beta.3 让 C# 直接创建原有 WPF 界面，使用 Windows 标准管理员权限清单。设备刷新不初始化 PowerShell，用户确认开始后才在后台加载原有制作引擎；保留界面布局、整盘复核、4 GiB 拆分规则、双进度和弹窗确认。
 
