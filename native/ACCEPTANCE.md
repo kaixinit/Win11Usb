@@ -1,6 +1,6 @@
 # 原生迁移验收记录
 
-日期：2026-10-22。候选版本：0.2.0-preview.2。beta.3 发布文件保持不变。
+日期：2026-10-22。候选版本：0.2.0-preview.3。beta.3 发布文件保持不变。
 
 ## 已完成的验证
 
@@ -13,7 +13,7 @@
 - 原有 39 组映像版本/发行版本/卷标用例全部通过；包含 2019/2021 LTSC、Windows 10/11 共享构建号、24H2/25H2/26H2、文件名冲突和 Server 优先识别。
 - 用户提供 preview.2 实机截图并反馈“可以下拉选择了”：普通权限下列出 Samsung PSSD T7 Touch（磁盘 2、931.5 GiB、F:、1 个分区）和 Kingston DataTraveler 3.0（磁盘 3、57.8 GiB、G:、1 个分区）；日志为 4 个磁盘接口、2 个 USB、2 个非 USB、0 个查询失败。两个内部 SSD 未列入 USB 下拉框。此项证明只读显示和选择恢复，不代表已经完成写盘验收，也未独立核验目标系统删减了哪些组件。
 
-preview.2 的 186 项自动断言、PE 依赖检查和 Defender 文件扫描结果见 [USB-DETECTION-preview2.md](USB-DETECTION-preview2.md)；[构建报告](BUILD-REPORT.md) 保留 preview.1 历史记录。**自动化通过不表示真实 USB 写盘或所有精简系统兼容性已通过。**
+preview.3 的 197 项自动断言、实际 WIMGAPI 回归样本、PE 依赖检查和 Defender 文件扫描结果见 [WIM-TEMP-preview3.md](WIM-TEMP-preview3.md)；[USB-DETECTION-preview2.md](USB-DETECTION-preview2.md) 和 [构建报告](BUILD-REPORT.md) 保留此前记录。**自动化通过不表示真实 USB 写盘或所有精简系统兼容性已通过。**
 
 ## 未完成 / 需要真机完成
 
@@ -25,7 +25,7 @@ preview.2 的 186 项自动断言、PE 依赖检查和 Defender 文件扫描结�
 | PE 多分区 U 盘 / 无盘符 | 一个物理磁盘条目，分区计数正确；最终只剩一个主分区 | 待测 |
 | 大容量 FAT32 | 64/128 GB 等 USB 整盘格式化为 FAT32，未截成 32 GB | 待测 |
 | NTFS | 完整提示兼容性；成功格式化；超过阈值 WIM 仍拆分 | 待测 |
-| 自动 ISO 挂载 | 手动选择 ISO 后正常挂载、读取 index 1、识别系统；既有挂载可复用 | 待测 |
+| 自动 ISO 挂载 | 手动选择 ISO 后正常挂载、读取 index 1、识别系统；既有挂载可复用 | 用户反馈已挂载 H:；preview.2 索引读取报 1632，preview.3 已用实际合成 WIM 验证修复，目标安装 ISO 待复测 |
 | 安装文件范围 | WIM 小于/超过阈值、ESD、已有连续 SWM 均与预检规则一致 | 待测 |
 | 大 WIM 拆分 | DISM 成功退出；每卷大于 0、不超过 4,294,967,295 字节、编号连续 | 待测 |
 | 真实复制 / 缓存 | 完整文件大小校验通过、启动文件存在、缓存刷新成功 | 待测 |

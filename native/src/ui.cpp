@@ -376,7 +376,7 @@ struct Ui {
         dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetSaveFileNameW(&dialog))
             return;
-        std::wstring report = L"Win11Usb 0.2.0-preview.2 — 设备识别诊断\r\n";
+        std::wstring report = L"Win11Usb 0.2.0-preview.3 — 设备识别诊断\r\n";
         report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
                          : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
         report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +
@@ -1014,7 +1014,7 @@ struct Ui {
                 percentText = L"已完成";
             }
             fileText = r->copied ? L"复制文件大小校验通过" : L"日志保留在窗口中。";
-            if (!r->error.empty())
+            if (!r->error.empty() && sessionLog.find(L"已停止：" + r->error + L"\r\n") == sessionLog.npos)
                 Log(L"已停止：" + r->error);
             footer = r->work.empty() ? L"制作日志保留在窗口中。" : L"日志目录：" + r->work;
             try {

@@ -1,15 +1,15 @@
 # Win11Usb C++ / Win32 原生迁移验证版
 
-目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.2`，**尚未完成真实 USB 写盘、UEFI 启动和精简 Windows 的验收，不应替换正式下载。**
+目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.3`，**尚未完成真实 USB 写盘、UEFI 启动和精简 Windows 的验收，不应替换正式下载。**
 
-preview.2 修正 USB 下拉列表展开高度、部分驱动返回的可变长度数据，以及 USB 桥接设备识别；只读列表保留查询不完整的 USB，并提供“导出诊断”。本机已通过 186 项自动断言和文件扫描，用户实机反馈已能展开并选择两支 USB；完整写盘流程仍待验收，详见 [本次修正与验证记录](USB-DETECTION-preview2.md)。[BUILD-REPORT.md](BUILD-REPORT.md) 保留 preview.1 的历史构建记录。
+preview.3 修复挂载 ISO 后读取映像索引 1 的 1632 错误：先设置本次任务的可写 WIM 临时目录，再读取元数据。用实际合成 WIM 完成旧版错误复现与修复验证，197 项自动断言通过，详见 [本次修复记录](WIM-TEMP-preview3.md)。此前 preview.2 的 USB 识别与下拉修复已获得用户实机反馈，见 [USB 识别记录](USB-DETECTION-preview2.md)。[BUILD-REPORT.md](BUILD-REPORT.md) 保留 preview.1 的历史构建记录。
 
 ## 两个单文件 EXE
 
 | 文件 | 用途 |
 | --- | --- |
-| `Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
-| `Win11Usb-NativeReview-v0.2.0-preview.2.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
+| `Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
+| `Win11Usb-NativeReview-v0.2.0-preview.3.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
 
 两者均使用原生 x64 PE、系统 MSVCRT 和静态 C++ 运行库，没有 CLR 头或托管程序集。无需额外安装 .NET、VC++ Redistributable、PowerShell 或 WebView。单文件指分发时一个 EXE；制作时仍会在本机创建日志、临时 SWM，并提取独立 FAT32 工具和对应源码/许可。
 
@@ -46,17 +46,17 @@ native\test.cmd "C:\path\to\llvm-mingw\bin"
 native\out\Win11Usb-NativeTests.exe native\tests\identity-fixtures.tsv work\native-elevated-test-unique --wim-roundtrip
 ```
 
-该附加测试不操作物理磁盘。普通权限下尝试 WIMCaptureImage 返回 1314，未将此项列为通过。真实 USB 驱动上的 IOCTL、FAT32/NTFS 格式化、自动 ISO 挂载、大 WIM 拆分、整盘复制、安全弹出和 UEFI 引导仍需按 [验收表](ACCEPTANCE.md) 实测。
+该附加测试不操作物理磁盘。普通权限下尝试 WIMCaptureImage 返回 1314，未将此项列为通过。标准测试另含无需捕获权限的实际合成 WIM 只读加载检查，样本说明见 [tests/fixtures](tests/fixtures/README.md)。真实 USB 驱动上的 IOCTL、FAT32/NTFS 格式化、大 WIM 拆分、整盘复制、安全弹出和 UEFI 引导仍需按 [验收表](ACCEPTANCE.md) 实测；用户已反馈 ISO 可挂载，索引读取修复仍需目标安装 ISO 复测。
 
 ## 只读诊断与界面预览
 
 ```bat
-Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe --list-disks disks.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe --dependency-report dependencies.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe --preview
-Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe --preview-blocked
-Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe --preview-running
-Win11Usb-NativeReadOnly-v0.2.0-preview.2.exe --preview-dialog
+Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe --list-disks disks.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe --dependency-report dependencies.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe --preview
+Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe --preview-blocked
+Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe --preview-running
+Win11Usb-NativeReadOnly-v0.2.0-preview.3.exe --preview-dialog
 ```
 
 `--preview*` 使用明确标注的示例数据，不是制作结果。弹窗预览点击“预览制作状态”打开，不会执行格式化。系统菜单提供“关于 Win11Usb / 许可证”。JSON 诊断不输出设备原始序列号或 PnP 标识。

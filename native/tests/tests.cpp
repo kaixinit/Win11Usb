@@ -424,6 +424,54 @@ void XmlTests() {
            "filename cannot bypass invalid metadata");
     std::cout << "PASS native WIM metadata parsing\n";
 }
+void WimReadTests(const std::wstring &root, const std::wstring &fixture) {
+    auto source = root + L"\\WIM source 中文";
+    auto image = source + L"\\install.wim";
+    auto scratch = root + L"\\WIM task 中文\\wim-temp";
+    MakeDirectory(source);
+    Require(CopyFileW(fixture.c_str(), image.c_str(), TRUE) != FALSE, "copy synthetic WIM fixture");
+    Require(SetFileAttributesW(image.c_str(), FILE_ATTRIBUTE_READONLY) != FALSE,
+            "WIM metadata source is read-only like mounted ISO");
+    std::vector<std::wstring> messages;
+    Hooks h;
+    h.log = [&](const std::wstring &s) { messages.push_back(s); };
+    auto d = ReadWimIdentity(image, L"windows_11_26h2.iso", scratch, h);
+    Require(d.label == L"WIN11_26H2" && d.version == L"10.0.26300.9457" && d.arch == 9,
+            "real WIMGAPI index 1 metadata read succeeds using task scratch");
+    Require(!messages.empty() && messages[0].find(scratch) != std::wstring::npos,
+            "actual WIM scratch directory logged");
+    Handle exclusive(CreateFileW(image.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr));
+    Require(exclusive.valid(), "WIM metadata handles closed after successful read");
+    exclusive.reset();
+    auto notDirectory = root + L"\\scratch-is-a-file.txt";
+    WriteUtf8(notDirectory, L"not a directory");
+    Reject([&] { ReadWimIdentity(image, L"windows_11_26h2.iso", notDirectory); },
+           "WIM scratch file rejected before loading image");
+    Reject([&] { ReadWimIdentity(image, L"windows_11_26h2.iso", L""); },
+           "WIM scratch cannot fall back to default current directory");
+    auto invalidImage = root + L"\\invalid.wim";
+    WriteUtf8(invalidImage, L"not a WIM image");
+    Reject([&] { ReadWimIdentity(invalidImage, L"windows_11_26h2.iso", scratch); },
+           "invalid WIM stays a preflight error");
+    // A per-process missing TEMP must not override the explicitly selected WIM scratch.
+    wchar_t oldTemp[32768];
+    DWORD oldLength = GetEnvironmentVariableW(L"TEMP", oldTemp, 32768);
+    struct RestoreTemp {
+        const wchar_t *value;
+        ~RestoreTemp() { SetEnvironmentVariableW(L"TEMP", value); }
+    } restore{oldLength && oldLength < 32768 ? oldTemp : nullptr};
+    Require(SetEnvironmentVariableW(L"TEMP", (root + L"\\missing-temp").c_str()) != FALSE,
+            "set missing TEMP only inside test process");
+    d = ReadWimIdentity(image, L"windows_11_26h2.iso", scratch);
+    Require(d.label == L"WIN11_26H2", "explicit WIM scratch works with unusable process TEMP");
+    std::atomic<bool> stop = false;
+    auto files = ListFiles(scratch + L"\\", stop);
+    Require(std::none_of(files.begin(), files.end(),
+                         [](const File &f) { return BaseName(f.full).rfind(L"write-check-", 0) == 0; }),
+            "WIM scratch write-check files do not remain after return or errors");
+    std::cout
+        << "PASS real read-only WIMGAPI fixture, Unicode task scratch, invalid scratch and missing TEMP\n";
+}
 void WimApiTest(const std::wstring &root) {
     HANDLE rawToken;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &rawToken))
@@ -472,7 +520,7 @@ void WimApiTest(const std::wstring &root) {
     close(file);
     if (!ok)
         throw Error(L"Fixture WIM metadata: " + WinError(error));
-    auto d = ReadWimIdentity(path, L"windows_11_26h2.iso");
+    auto d = ReadWimIdentity(path, L"windows_11_26h2.iso", root + L"\\capture-read-temp");
     Require(d.label == L"WIN11_26H2" && d.version == L"10.0.26300.9457" && d.arch == 9,
             "actual native WIMGAPI metadata roundtrip");
     std::cout << "PASS actual native WIM capture and read-only metadata roundtrip\n";
@@ -557,6 +605,7 @@ int wmain(int argc, wchar_t **argv) {
         StorageCompatibilityTests();
         XmlTests();
         FileTests(root);
+        WimReadTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
         if (argc == 4 && std::wstring(argv[3]) == L"--wim-roundtrip")
             WimApiTest(root);
         else

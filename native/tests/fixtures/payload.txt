@@ -1,0 +1,1 @@
+Win11Usb synthetic metadata test fixture. MIT. This is not a Windows installation image.
