@@ -179,6 +179,7 @@ struct Prepared {
 struct Result {
     bool copied = false, cancelled = false, rebuildStarted = false;
     std::wstring error, work;
+    std::wstring ejectWarning;
 };
 class Backend {
   public:

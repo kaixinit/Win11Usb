@@ -1,3 +1,4 @@
+#include "eject.hpp"
 #include "platform.hpp"
 #include <algorithm>
 #include <cfgmgr32.h>
@@ -507,27 +508,24 @@ class NativeBackend final : public Backend {
         workspace->CleanupSwm(swm);
     }
     void EjectUsb(const Request &r, const std::wstring &) override {
-        TargetVolume(r);
+        EjectUsbNative(r.disk, [&] { TargetVolume(r); }, [&] { PrepareEject(); }, aborted);
+    }
+    void PrepareEject() {
         Handle handle(CreateFileW(Bare(volume).c_str(), GENERIC_READ | GENERIC_WRITE,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
         if (!handle.valid())
-            throw Error(WinError());
+            throw Error(L"安全弹出前无法打开目标卷：" + WinError());
         if (!FlushFileBuffers(handle))
-            throw Error(WinError());
-        Io(handle, FSCTL_LOCK_VOLUME);
-        Io(handle, FSCTL_DISMOUNT_VOLUME);
-        Io(handle, FSCTL_UNLOCK_VOLUME);
+            throw Error(L"安全弹出前刷新 U 盘写入缓存失败：" + WinError());
+        auto control = [&](DWORD code, const wchar_t *step) {
+            DWORD returned = 0;
+            if (!DeviceIoControl(handle, code, nullptr, 0, nullptr, 0, &returned, nullptr))
+                throw Error(std::wstring(L"安全弹出前") + step + L"失败：" + WinError());
+        };
+        control(FSCTL_LOCK_VOLUME, L"锁定目标卷");
+        control(FSCTL_DISMOUNT_VOLUME, L"卸载目标卷");
+        control(FSCTL_UNLOCK_VOLUME, L"解锁目标卷");
         handle.reset();
-        DEVINST dev = 0;
-        std::wstring pnp = r.disk.pnp;
-        if (CM_Locate_DevNodeW(&dev, pnp.data(), CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS)
-            throw Error(L"不能定位 USB 设备。");
-        PNP_VETO_TYPE veto = PNP_VetoTypeUnknown;
-        wchar_t name[512]{};
-        CONFIGRET e = CM_Request_Device_EjectW(dev, &veto, name, 512, 0);
-        if (e != CR_SUCCESS)
-            throw Error(L"设备仍被使用（CM " + std::to_wstring(e) + L"，veto " + std::to_wstring(veto) +
-                        L"）。请稍后通过系统安全弹出。");
     }
     void EjectIso() override {
         if (iso)

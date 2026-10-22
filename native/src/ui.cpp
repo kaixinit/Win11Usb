@@ -427,7 +427,7 @@ struct Ui {
         dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetSaveFileNameW(&dialog))
             return;
-        std::wstring report = L"Win11Usb 0.2.0-preview.10 — 设备识别诊断\r\n";
+        std::wstring report = L"Win11Usb 0.2.0-preview.11 — 设备识别诊断\r\n";
         report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
                          : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
         report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +
@@ -1050,12 +1050,16 @@ struct Ui {
             busy = false;
             finished = r->copied;
             phase = r->copied ? L"制作完成" : r->cancelled ? L"制作已取消" : L"制作未完成";
+            if (r->copied && !r->ejectWarning.empty())
+                phase = L"制作完成 · U 盘未弹出";
             if (r->copied) {
                 progress.stage = 6;
                 progress.overall = 100;
                 percentText = L"已完成";
             }
             fileText = r->copied ? L"文件大小和内容校验通过" : L"日志保留在窗口中。";
+            if (r->copied && !r->ejectWarning.empty())
+                fileText += L"；U 盘尚未安全弹出";
             if (!r->error.empty() && sessionLog.find(L"已停止：" + r->error + L"\r\n") == sessionLog.npos)
                 Log(L"已停止：" + r->error);
             footer = r->work.empty() ? L"制作日志保留在窗口中。" : L"日志目录：" + r->work;
@@ -1077,6 +1081,10 @@ struct Ui {
                     : r->rebuildStarted ? L"目标磁盘可能需要重新制作，请查看日志。"
                                         : L"本次未开始清盘，请查看日志。",
                     r->error, L"确定", L"返回");
+            else if (!r->ejectWarning.empty())
+                Ask(window, L"制作完成，U 盘尚未弹出",
+                    L"安装文件已复制并校验。请根据以下原因处理，稍后通过系统安全弹出 U 盘。", r->ejectWarning,
+                    L"确定", L"返回");
             return 0;
         }
         case WM_CLOSE:

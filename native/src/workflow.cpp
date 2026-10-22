@@ -103,6 +103,7 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
                 backend.EjectUsb(r, target);
                 log(L"U 盘已安全弹出，可以拔下。");
             } catch (const Error &e) {
+                result.ejectWarning = e.text;
                 log(L"复制校验通过，但 U 盘尚未安全弹出：" + e.text);
             }
         }

@@ -22,10 +22,26 @@ void Pump(DWORD duration) {
 struct Paints {
     unsigned parent = 0, log = 0, iso = 0, disk = 0, outside = 0;
     Ui *ui = nullptr;
+    bool warningSeen = false;
     void Clear() { parent = log = iso = disk = outside = 0; }
 };
 LRESULT CALLBACK CountPaint(HWND window, UINT message, WPARAM a, LPARAM b, UINT_PTR id, DWORD_PTR data) {
     auto &p = *(Paints *)data;
+    if (id == 1 && message == WM_TIMER && a == 93) {
+        HWND popup = GetLastActivePopup(window);
+        DWORD process = 0;
+        GetWindowThreadProcessId(popup, &process);
+        if (popup != window && process == GetCurrentProcessId() && GetWindow(popup, GW_OWNER) == window) {
+            wchar_t title[128]{}, body[1024]{};
+            GetWindowTextW(popup, title, 128);
+            GetWindowTextW(GetDlgItem(popup, 3), body, 1024);
+            p.warningSeen = std::wstring(title) == L"制作完成，U 盘尚未弹出" &&
+                            std::wstring(body).find(L"不支持") != std::wstring::npos;
+            KillTimer(window, 93);
+            SendMessageW(popup, WM_COMMAND, IDCANCEL, 0); // This test process's informational sample only.
+        }
+        return 0;
+    }
     if (message == WM_PAINT) {
         if (id == 1) {
             p.parent++;
@@ -129,12 +145,20 @@ int wmain(int argc, wchar_t **argv) {
                 "completion flushes all queued logs before closing the persisted log");
         Require(ui.finished && ui.progress.overall == 100,
                 "completion cannot be overwritten by queued stale progress");
+        SetTimer(window, 93, 100, nullptr);
+        SendMessageW(window, WM_FINISHED, 0,
+                     (LPARAM) new Result{true, false, false, L"", output,
+                                         L"此设备节点不支持当前安全弹出请求。（CM 23，veto 8）"});
+        Require(paints.warningSeen && ui.finished && ui.phase == L"制作完成 · U 盘未弹出" &&
+                    ui.fileText.find(L"尚未安全弹出") != ui.fileText.npos,
+                "eject failure uses accurate existing dialog and completed-but-not-ejected UI state");
         auto report = L"{\"simulated_log_events\":5000,\"simulated_progress_events\":10000,"
                       L"\"copy_parent_paints\":" +
                       std::to_wstring(copyParent) + L",\"copy_log_paints\":" + std::to_wstring(copyLog) +
                       L",\"verify_parent_paints\":" + std::to_wstring(verifyParent) +
                       L",\"verify_log_paints\":" + std::to_wstring(verifyLog) +
-                      L",\"settings_repaints\":0,\"persisted_log_complete\":true,\"physical_disk_writes\":0}";
+                      L",\"settings_repaints\":0,\"persisted_log_complete\":true,\"eject_warning_shown\":"
+                      L"true,\"physical_disk_writes\":0}";
         WriteUtf8(output + L"\\ui-refresh.json", report);
         std::cout << "PASS actual production UI: " << Utf8(report) << '\n';
         if (argc == 3 && std::wstring(argv[2]) == L"--visual") {

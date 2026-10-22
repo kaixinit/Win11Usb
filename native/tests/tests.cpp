@@ -6,6 +6,8 @@
 #include <sstream>
 #include <thread>
 
+int EjectTests(const std::wstring &root);
+
 using namespace wu;
 namespace {
 int checks = 0;
@@ -222,6 +224,8 @@ void WorkflowTests() {
         h.ask = [](Prompt, const std::wstring &) { return true; };
         auto r = RunWorkflow(TestRequest(), f, h, s);
         Require(r.copied && r.error.empty(), "post-verify warning preserves successful copy");
+        Require(r.ejectWarning.empty() == (f.fail != L"eject-usb"),
+                "USB eject failure is carried separately to completion UI without changing copy result");
     }
     {
         Fake f;
@@ -1759,6 +1763,7 @@ int wmain(int argc, wchar_t **argv) {
         LayoutReadTests();
         RebuildTests(root);
         PostPartitionTests(root);
+        checks += EjectTests(root);
         XmlTests();
         FileTests(root);
         PinReleaseTests(root);
