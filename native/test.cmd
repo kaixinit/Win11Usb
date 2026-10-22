@@ -17,4 +17,8 @@ if errorlevel 1 exit /b 1
 native\out\Win11Usb-Fat32Tests.exe --invalid-seek >"%FAT_RESULTS%\invalid-seek.txt" 2>&1
 if not errorlevel 1 exit /b 1
 echo PASS formatter invalid-handle seek returns failure before any write
+native\out\Win11Usb-Fat32Tests.exe --lock-timeout "%FAT_RESULTS%" >"%FAT_RESULTS%\lock-timeout.txt" 2>&1
+if not "%ERRORLEVEL%"=="32" exit /b 1
+native\out\Win11Usb-Fat32Tests.exe --verify-unwritten "%FAT_RESULTS%"
+if errorlevel 1 exit /b 1
 exit /b 0

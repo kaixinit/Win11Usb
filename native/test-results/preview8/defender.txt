@@ -1,0 +1,4 @@
+Scan starting...
+Scan finished.
+Scanning C:\Users\WIN11H26\Documents\Codex\2026-10-02\new-chat-2\work\native-preview8-release-defender-003f7fd6ccbe4784bad819a3b8232d58 found no threats.
+SCAN_EXIT_CODE=0

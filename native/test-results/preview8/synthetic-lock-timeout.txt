@@ -1,0 +1,10 @@
+Cannot acquire confirmed volume: locking volume. No FAT32 metadata was written.
+Close files or other disk tools using the target USB, then retry. Volume lock was not bypassed.
+GetLastError()=32: 另一个程序正在使用此文件，进程无法访问。
+
+Waiting for confirmed volume: locking volume, error 32, elapsed 0 seconds (limit 30).
+Waiting for confirmed volume: locking volume, error 32, elapsed 5 seconds (limit 30).
+Waiting for confirmed volume: locking volume, error 32, elapsed 10 seconds (limit 30).
+Waiting for confirmed volume: locking volume, error 32, elapsed 15 seconds (limit 30).
+Waiting for confirmed volume: locking volume, error 32, elapsed 20 seconds (limit 30).
+Waiting for confirmed volume: locking volume, error 32, elapsed 25 seconds (limit 30).

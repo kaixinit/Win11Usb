@@ -325,6 +325,59 @@ BYTE get_sectors_per_cluster ( LONGLONG DiskSizeBytes, DWORD BytesPerSect )
 
 // Win11Usb modification: require a volume GUID and the exact expected extent.
 // This formatter remains an independently executed GPL program.
+static HANDLE acquire_confirmed_volume(const char *volume, DWORD disk, ULONGLONG offset,
+                                        ULONGLONG length, const char **failed_stage)
+{
+    ULONGLONG started = GetTickCount64(), last_log = started;
+    DWORD previous = 0;
+    const char *previous_stage = NULL;
+    for (;;) {
+        DWORD error = ERROR_SUCCESS, returned = 0;
+        HANDLE handle;
+        *failed_stage = "opening volume";
+        handle = CreateFile(volume, GENERIC_READ | GENERIC_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_NO_BUFFERING, NULL);
+        if (handle != INVALID_HANDLE_VALUE) {
+            VOLUME_DISK_EXTENTS ext;
+            *failed_stage = "checking volume extent before locking";
+            if (!DeviceIoControl(handle, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+                                 NULL, 0, &ext, sizeof(ext), &returned, NULL))
+                error = GetLastError();
+            else if (returned < sizeof(ext) || ext.NumberOfDiskExtents != 1 ||
+                     ext.Extents[0].DiskNumber != disk ||
+                     ext.Extents[0].StartingOffset.QuadPart != offset ||
+                     ext.Extents[0].ExtentLength.QuadPart != length)
+                error = ERROR_INVALID_DATA;
+            else {
+                *failed_stage = "locking volume";
+                if (DeviceIoControl(handle, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &returned, NULL)) {
+                    printf("Confirmed volume opened and locked; no FAT32 metadata written yet.\n");
+                    return handle;
+                }
+                error = GetLastError();
+            }
+            CloseHandle(handle);
+        } else error = GetLastError();
+        /* Retry only acquisition, never formatting. An access-denied lock can
+           mean open files; access-denied opening remains a hard permission error. */
+        if ((error != ERROR_SHARING_VIOLATION && error != ERROR_LOCK_VIOLATION &&
+             error != ERROR_BUSY && error != ERROR_NOT_READY &&
+             !(error == ERROR_ACCESS_DENIED && !strcmp(*failed_stage, "locking volume"))) ||
+            GetTickCount64() - started >= 30000) {
+            SetLastError(error ? error : ERROR_GEN_FAILURE);
+            return INVALID_HANDLE_VALUE;
+        }
+        if (error != previous || previous_stage != *failed_stage || GetTickCount64() - last_log >= 5000) {
+            printf("Waiting for confirmed volume: %s, error %lu, elapsed %llu seconds (limit 30).\n",
+                   *failed_stage, error, (GetTickCount64() - started) / 1000);
+            previous = error;
+            previous_stage = *failed_stage;
+            last_log = GetTickCount64();
+        }
+        Sleep(200);
+    }
+}
 int format_volume ( const char* volume, format_params* params,
                     DWORD expected_disk, ULONGLONG expected_offset,
                     ULONGLONG expected_length, DWORD expected_sector )
@@ -369,18 +422,17 @@ int format_volume ( const char* volume, format_params* params,
     
 
 
-    // open the drive
-    hDevice = CreateFile (
-        DriveDevicePath,  
-        GENERIC_READ | GENERIC_WRITE,
-        0 ,
-        NULL, 
-        OPEN_EXISTING, 
-        FILE_FLAG_NO_BUFFERING,
-        NULL);
-
-    if ( hDevice ==  INVALID_HANDLE_VALUE )
-        die( "Failed to open device - close any files before formatting and make sure you have Admin rights when using fat32format\n Are you SURE you're formatting the RIGHT DRIVE!!!" );
+    {
+        const char *stage = NULL;
+        hDevice = acquire_confirmed_volume(DriveDevicePath, expected_disk, expected_offset,
+                                            expected_length, &stage);
+        if (hDevice == INVALID_HANDLE_VALUE) {
+            DWORD error = GetLastError();
+            fprintf(stderr, "Cannot acquire confirmed volume: %s. No FAT32 metadata was written.\n", stage);
+            SetLastError(error);
+            die("Close files or other disk tools using the target USB, then retry. Volume lock was not bypassed.");
+        }
+    }
 
     { VOLUME_DISK_EXTENTS ext;
       if (!DeviceIoControl(hDevice, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
@@ -407,13 +459,7 @@ int format_volume ( const char* volume, format_params* params,
 	else
 		printf ( "FSCTL_ALLOW_EXTENDED_DASD_IO OK\n" ); 
 
-    // lock it
-    bRet = DeviceIoControl( hDevice, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &cbRet, NULL );
-
-    if ( !bRet )
-        die( "Failed to lock device" );
-
-
+    // The same handle is already locked; recheck its extent and geometry before writes.
     // work out drive params
     bRet = DeviceIoControl ( hDevice, IOCTL_DISK_GET_DRIVE_GEOMETRY    ,
         NULL, 0, &dgDrive, sizeof(dgDrive),
