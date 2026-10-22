@@ -1,3 +1,4 @@
+#include "ui_updates.hpp"
 #include "win11usb.hpp"
 #include <algorithm>
 #include <cmath>
@@ -11,9 +12,11 @@ namespace wu {
 namespace {
 constexpr COLORREF Bg = RGB(250, 252, 255), Ink = RGB(23, 43, 72), Muted = RGB(100, 116, 139),
                    Blue = RGB(33, 101, 223), Line = RGB(223, 230, 239), LogBg = RGB(20, 34, 53);
-constexpr UINT WM_CATALOG = WM_APP + 10, WM_LOG_LINE = WM_APP + 11, WM_PROGRESS_VALUE = WM_APP + 12,
-               WM_PROMPT_VALUE = WM_APP + 13, WM_FINISHED = WM_APP + 14, WM_WORK_PATH = WM_APP + 15,
-               WM_PREVIEW_DIALOG = WM_APP + 16;
+constexpr UINT WM_CATALOG = WM_APP + 10, WM_UI_UPDATE = WM_APP + 11, WM_PROMPT_VALUE = WM_APP + 13,
+               WM_FINISHED = WM_APP + 14, WM_WORK_PATH = WM_APP + 15, WM_PREVIEW_DIALOG = WM_APP + 16;
+constexpr DWORD MainWindowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+constexpr UINT_PTR UpdateTimer = 92;
+constexpr UINT UpdateInterval = 100;
 enum { ID_ISO = 101, ID_REFRESH, ID_DISK, ID_FAT, ID_NTFS, ID_START, ID_STOP, ID_LOG, ID_EXPORT };
 struct Ui;
 void Fill(HDC dc, RECT r, COLORREF c) {
@@ -219,6 +222,7 @@ struct Ui {
                       diskNote = L"正在读取 USB 设备…", phase = L"准备就绪", percentText = L"0.0%",
                       fileText = L"等待开始制作", footer = L"只读检查不会修改 U 盘。", sessionLog;
     Progress progress;
+    UiUpdates updates;
     std::atomic<bool> cancel{false};
     Handle scanner, worker, sessionFile;
     std::unique_ptr<Backend> backend;
@@ -248,26 +252,73 @@ struct Ui {
     void Log(const std::wstring &s) {
         if (s.empty())
             return;
-        sessionLog += s + L"\r\n";
+        AppendLog(s + L"\r\n");
+    }
+    void AppendLog(const std::wstring &text) {
+        sessionLog += text;
         if (sessionFile.valid()) {
-            std::string bytes = Utf8(s + L"\r\n");
+            std::string bytes = Utf8(text);
             DWORD n = 0;
             if (!WriteFile(sessionFile, bytes.data(), (DWORD)bytes.size(), &n, nullptr) ||
                 n != bytes.size()) {
                 sessionFile.reset();
                 footer = L"日志文件写入失败，请保留窗口日志。";
+                auto area = R(22, height - 52, width - 272, height - 11);
+                InvalidateRect(window, &area, FALSE);
             }
         }
+        // Keep the newest portion visible even if a delayed UI receives one very
+        // large batch. The persisted session log above always receives all text.
+        std::wstring visible = text;
+        if (visible.size() > 1000000) {
+            auto cut = visible.find(L'\n', visible.size() - 1000000);
+            visible = L"[较早日志请查看 session.log]\r\n" +
+                      visible.substr(cut == visible.npos ? visible.size() - 1000000 : cut + 1);
+        }
+        // Appending and moving the caret can otherwise paint the EDIT repeatedly.
+        // Resume and invalidate once after the complete batch, including its scrollbar.
+        SendMessageW(log, WM_SETREDRAW, FALSE, 0);
         int len = GetWindowTextLengthW(log);
-        if (len > 1500000) {
-            SendMessageW(log, EM_SETSEL, 0, 500000);
+        if ((size_t)len + visible.size() > 1500000) {
+            SendMessageW(log, EM_SETSEL, 0, std::max<size_t>(500000, len + visible.size() - 1400000));
             SendMessageW(log, EM_REPLACESEL, FALSE, (LPARAM)L"[较早日志请查看 session.log]\r\n");
             len = GetWindowTextLengthW(log);
         }
         SendMessageW(log, EM_SETSEL, len, len);
-        std::wstring line = s + L"\r\n";
-        SendMessageW(log, EM_REPLACESEL, FALSE, (LPARAM)line.c_str());
+        SendMessageW(log, EM_REPLACESEL, FALSE, (LPARAM)visible.c_str());
+        SendMessageW(log, WM_SETREDRAW, TRUE, 0);
+        // EDIT defers line layout while redraw is disabled. Scroll after enabling
+        // it so a batched append follows the newest line instead of staying at top.
         SendMessageW(log, EM_SCROLLCARET, 0, 0);
+        RedrawWindow(log, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_NOERASE);
+    }
+    void QueueLog(const std::wstring &s) {
+        if (updates.Log(s))
+            PostMessageW(window, WM_UI_UPDATE, 0, 0);
+    }
+    void QueueProgress(const Progress &p) {
+        if (updates.Update(p))
+            PostMessageW(window, WM_UI_UPDATE, 0, 0);
+    }
+    void FlushUpdates() {
+        KillTimer(window, UpdateTimer);
+        auto batch = updates.Take();
+        if (!batch.logs.empty()) {
+            std::wstring text;
+            for (const auto &line : batch.logs)
+                text += line + L"\r\n";
+            AppendLog(text);
+        }
+        if (batch.progress) {
+            progress = std::move(*batch.progress);
+            phase = progress.title;
+            std::wostringstream t;
+            t << std::fixed << std::setprecision(1) << std::max(0.0, progress.overall) << L"%";
+            percentText = progress.overall < 0 ? L"…" : t.str();
+            fileText = progress.file.empty() ? L"等待当前文件进度…" : L"当前文件：" + progress.file;
+            auto area = R(22, 326, width - 22, 422);
+            InvalidateRect(window, &area, FALSE);
+        }
     }
     Disk *Selection() {
         int i = (int)SendMessageW(combo, CB_GETCURSEL, 0, 0);
@@ -376,7 +427,7 @@ struct Ui {
         dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetSaveFileNameW(&dialog))
             return;
-        std::wstring report = L"Win11Usb 0.2.0-preview.9 — 设备识别诊断\r\n";
+        std::wstring report = L"Win11Usb 0.2.0-preview.10 — 设备识别诊断\r\n";
         report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
                          : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
         report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +
@@ -546,16 +597,8 @@ struct Ui {
                         if (!PostMessageW(u->window, WM_WORK_PATH, 0, (LPARAM)t))
                             delete t;
                     };
-                    h.log = [u](const std::wstring &s) {
-                        auto t = new std::wstring(s);
-                        if (!PostMessageW(u->window, WM_LOG_LINE, 0, (LPARAM)t))
-                            delete t;
-                    };
-                    h.progress = [u](const Progress &v) {
-                        auto t = new Progress(v);
-                        if (!PostMessageW(u->window, WM_PROGRESS_VALUE, 0, (LPARAM)t))
-                            delete t;
-                    };
+                    h.log = [u](const std::wstring &s) { u->QueueLog(s); };
+                    h.progress = [u](const Progress &v) { u->QueueProgress(v); };
                     h.ask = [u](Prompt k, const std::wstring &s) {
                         auto q = std::make_shared<PromptMessage>();
                         q->kind = k;
@@ -611,6 +654,7 @@ struct Ui {
                  L"只会结束本程序及其启动的命令，不会结束其他应用。", L"结束并退出", L"继续等待", true))
             return;
         cancel = true;
+        FlushUpdates();
         if (sessionFile.valid()) {
             Log(L"用户确认强制结束。未完成的 U 盘需要重新制作。");
             FlushFileBuffers(sessionFile);
@@ -767,7 +811,8 @@ struct Ui {
              DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         Text(dc, small, footer, R(22, height - 52, right - 250, height - 11), Muted,
              DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
-        BitBlt(dest, 0, 0, cr.right, cr.bottom, dc, 0, 0, SRCCOPY);
+        BitBlt(dest, ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right - ps.rcPaint.left,
+               ps.rcPaint.bottom - ps.rcPaint.top, dc, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
         SelectObject(dc, old);
         DeleteObject(bitmap);
         DeleteDC(dc);
@@ -933,19 +978,22 @@ struct Ui {
                 KillTimer(window, 91);
                 Scan();
             }
+            if (a == UpdateTimer)
+                FlushUpdates();
             return 0;
         case WM_CATALOG: {
             std::unique_ptr<Catalog> c((Catalog *)b);
             ApplyCatalog(std::move(*c));
             return 0;
         }
-        case WM_LOG_LINE: {
-            std::unique_ptr<std::wstring> s((std::wstring *)b);
-            Log(*s);
+        case WM_UI_UPDATE: {
+            if (!SetTimer(window, UpdateTimer, UpdateInterval, nullptr))
+                FlushUpdates();
             return 0;
         }
         case WM_WORK_PATH: {
             std::unique_ptr<std::wstring> path((std::wstring *)b);
+            FlushUpdates();
             sessionFile.reset(CreateFileW((*path + L"\\session.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                                           nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
             if (!sessionFile.valid()) {
@@ -956,6 +1004,8 @@ struct Ui {
             DWORD n = 0;
             WriteFile(sessionFile, bytes.data(), (DWORD)bytes.size(), &n, nullptr);
             footer = L"日志目录：" + *path;
+            auto area = R(22, height - 52, width - 272, height - 11);
+            InvalidateRect(window, &area, FALSE);
             return 0;
         }
         case WM_PREVIEW_DIALOG: {
@@ -970,19 +1020,9 @@ struct Ui {
             Log(answer ? L"弹窗预览：已选择确认（未执行写盘）。" : L"弹窗预览：已取消（未执行写盘）。");
             return 0;
         }
-        case WM_PROGRESS_VALUE: {
-            std::unique_ptr<Progress> p((Progress *)b);
-            progress = *p;
-            phase = p->title;
-            std::wostringstream t;
-            t << std::fixed << std::setprecision(1) << std::max(0.0, p->overall) << L"%";
-            percentText = p->overall < 0 ? L"…" : t.str();
-            fileText = p->file.empty() ? L"等待当前文件进度…" : L"当前文件：" + p->file;
-            InvalidateRect(window, nullptr, FALSE);
-            return 0;
-        }
         case WM_PROMPT_VALUE: {
             std::unique_ptr<std::shared_ptr<PromptMessage>> holder((std::shared_ptr<PromptMessage> *)b);
+            FlushUpdates();
             auto q = *holder;
             bool fmt = q->kind == Prompt::Format;
             std::wstring name = fmt                           ? L"整盘格式化"
@@ -1006,6 +1046,7 @@ struct Ui {
         }
         case WM_FINISHED: {
             std::unique_ptr<Result> r((Result *)b);
+            FlushUpdates();
             busy = false;
             finished = r->copied;
             phase = r->copied ? L"制作完成" : r->cancelled ? L"制作已取消" : L"制作未完成";
@@ -1115,7 +1156,7 @@ int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promp
 #else
                                   L"Windows 安装 U 盘制作工具 · C++ 原生验证版",
 #endif
-                                  WS_OVERLAPPEDWINDOW, (wa.right - w) / 2, (wa.bottom - h) / 2, w, h, nullptr,
+                                  MainWindowStyle, (wa.right - w) / 2, (wa.bottom - h) / 2, w, h, nullptr,
                                   nullptr, instance, u);
     if (!window)
         throw Error(L"原生窗口创建失败：" + WinError());

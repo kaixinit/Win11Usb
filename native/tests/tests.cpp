@@ -1,4 +1,5 @@
 #include "platform.hpp"
+#include "ui_updates.hpp"
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -296,6 +297,52 @@ void FinishTests() {
     Require(fake.calls.back() == L"finish" &&
                 std::count(fake.calls.begin(), fake.calls.end(), L"finish") == 1,
             "scope guard finalizes even when error reporting itself throws");
+}
+void UiUpdateTests() {
+    UiUpdates updates;
+    unsigned wakes = 0;
+    for (int i = 0; i < 10000; ++i) {
+        wakes += updates.Log(std::to_wstring(i));
+        wakes += updates.Update({4, i / 100.0, 0, L"copy", std::to_wstring(i), 0});
+    }
+    Require(wakes == 1, "dense UI events generate one wake-up while a batch is pending");
+    auto batch = updates.Take();
+    Require(batch.logs.size() == 10000 && batch.logs.front() == L"0" && batch.logs.back() == L"9999",
+            "UI batching preserves every log in order");
+    Require(batch.progress && batch.progress->file == L"9999",
+            "UI batching displays newest progress instead of replaying stale frames");
+    auto empty = updates.Take();
+    Require(empty.logs.empty() && !empty.progress, "UI drain clears pending progress and logs");
+    Require(updates.Update({5, -1, 0, L"verify", L"", 0}), "new stage wakes UI again after a drain");
+    Require(updates.Take().progress->stage == 5, "stage boundary is not lost by coalescing");
+    Require(!updates.Log(L""), "empty logs do not schedule unnecessary UI updates");
+    std::atomic<bool> done = false;
+    std::thread producer([&] {
+        for (int i = 0; i < 20000; ++i) {
+            updates.Log(std::to_wstring(i));
+            updates.Update({4, i / 200.0, 0, L"copy", std::to_wstring(i), 0});
+        }
+        done = true;
+    });
+    size_t count = 0;
+    bool ordered = true;
+    std::wstring latest;
+    auto consume = [&] {
+        auto b = updates.Take();
+        for (const auto &line : b.logs)
+            ordered = (line == std::to_wstring(count++)) && ordered;
+        if (b.progress)
+            latest = b.progress->file;
+    };
+    while (!done) {
+        consume();
+        Sleep(1);
+    }
+    producer.join();
+    consume();
+    Require(ordered && count == 20000 && latest == L"19999",
+            "concurrent worker/UI drain loses no logs or final progress");
+    std::cout << "PASS coalesced UI events, ordered complete logs and concurrent progress delivery\n";
 }
 void FileTests(const std::wstring &root) {
     std::atomic<bool> stop = false;
@@ -1706,6 +1753,7 @@ int wmain(int argc, wchar_t **argv) {
         PlanTests();
         WorkflowTests();
         FinishTests();
+        UiUpdateTests();
         SnapshotTests();
         StorageCompatibilityTests();
         LayoutReadTests();

@@ -1,0 +1,1 @@
+PASS actual production UI: {"simulated_log_events":5000,"simulated_progress_events":10000,"copy_parent_paints":1,"copy_log_paints":3,"verify_parent_paints":1,"verify_log_paints":0,"settings_repaints":0,"persisted_log_complete":true,"physical_disk_writes":0}
