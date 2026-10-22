@@ -1,0 +1,69 @@
+PASS 39 unchanged legacy image identity cases
+PASS size boundary, image and SWM preflight
+PASS full FAT32/NTFS state machine, prompts and injected failures
+PASS physical identity and partition snapshot guards
+PASS USB ancestry, variable-length storage headers, partial-query safety and diagnostics
+PASS actual partition-buffer parsing, empty MBR/RAW and unused slots
+PASS shared disk rebuild sequence: identity, empty MBR, driver delays, abort and timeout
+PASS post-partition production waits, format arguments, allocation and copy manifests
+PASS native WIM metadata parsing
+PASS actual native file copy, Unicode paths, size verification, cancellation
+PASS real read-only WIMGAPI fixture, Unicode task scratch, invalid scratch and missing TEMP
+PASS actual WIMGAPI split header and missing-last-part checks
+PASS production task WIM preflight from absent scratch through actual volume checks and WIMGAPI
+PASS actual task directory pins, DISM scratch, strict SWM cleanup and partition readiness
+PASS six-stage FAT32/NTFS file integration; format, DISM data and eject are test doubles
+NOT RUN WIM capture roundtrip: requires administrator backup privilege; use --wim-roundtrip
+PASS actual native process argv, timeout and owned-job cancellation
+PASS real NTFS junction replacement and cleanup scope guard
+PASS 421 assertions; no physical disks were written
+FSCTL_ALLOW_EXTENDED_DASD_IO OK
+Size : 8GB 16773120 sectors
+512 Bytes Per Sector, Cluster size 4096 bytes
+Volume ID is 1e1f:1e79
+32 Reserved Sectors, 16349 Sectors per FAT, 2 fats
+2092548 Total clusters
+2092547 Free Clusters
+Formatting explicitly confirmed volume work\native-formatter-tests-27838-25155\fat-8GiB-512.img...
+Clearing out 32738 sectors for Reserved sectors, fats and root cluster...
+Wrote 16761856 bytes in 0.07 seconds, 239.86 Megabytes/sec
+Initialising reserved sectors and FATs...
+DonePASS file-backed FAT32 8 GiB / 512-byte sectors (not physical disk format)
+FSCTL_ALLOW_EXTENDED_DASD_IO OK
+Size : 68GB 134213632 sectors
+512 Bytes Per Sector, Cluster size 32768 bytes
+Volume ID is 1e1f:1f1e
+32 Reserved Sectors, 16380 Sectors per FAT, 2 fats
+2096575 Total clusters
+2096574 Free Clusters
+Formatting explicitly confirmed volume work\native-formatter-tests-27838-25155\fat-64GiB-512.img...
+Clearing out 32856 sectors for Reserved sectors, fats and root cluster...
+Wrote 16822272 bytes in 0.10 seconds, 168.15 Megabytes/sec
+Initialising reserved sectors and FATs...
+DonePASS file-backed FAT32 64 GiB / 512-byte sectors (not physical disk format)
+FSCTL_ALLOW_EXTENDED_DASD_IO OK
+Size : 8GB 2096640 sectors
+4096 Bytes Per Sector, Cluster size 4096 bytes
+Volume ID is 1e1f:1f28
+32 Reserved Sectors, 2044 Sectors per FAT, 2 fats
+2092520 Total clusters
+2092519 Free Clusters
+Formatting explicitly confirmed volume work\native-formatter-tests-27838-25155\fat-8GiB-4096.img...
+Clearing out 4121 sectors for Reserved sectors, fats and root cluster...
+Wrote 16879616 bytes in 0.01 seconds, 1103.58 Megabytes/sec
+Initialising reserved sectors and FATs...
+DonePASS file-backed FAT32 8 GiB / 4096-byte sectors (not physical disk format)
+FSCTL_ALLOW_EXTENDED_DASD_IO OK
+Size : 68GB 16776704 sectors
+4096 Bytes Per Sector, Cluster size 32768 bytes
+Volume ID is 1e1f:1f2b
+32 Reserved Sectors, 2048 Sectors per FAT, 2 fats
+2096572 Total clusters
+2096571 Free Clusters
+Formatting explicitly confirmed volume work\native-formatter-tests-27838-25155\fat-64GiB-4096.img...
+Clearing out 4136 sectors for Reserved sectors, fats and root cluster...
+Wrote 16941056 bytes in 0.01 seconds, 1160.25 Megabytes/sec
+Initialising reserved sectors and FATs...
+DonePASS file-backed FAT32 64 GiB / 4096-byte sectors (not physical disk format)
+PASS formatter 129 assertions; only ordinary files written; no storage IOCTLs issued
+PASS formatter invalid-handle seek returns failure before any write

@@ -1,5 +1,9 @@
 # WIMGAPI 元数据读取回归样本
 
+preview.7 增加 `split/install.swm`（1,950 字节）和 `split/install2.swm`（1,760 字节），由下述同一个合成 `metadata.wim` 通过开发工具 `wimlib-imagex split metadata.wim install.swm 0.0001 --check` 生成。极小分卷值仅用于得到两卷测试数据，不是产品拆分参数。源样本没有完整性表，工具报告跳过源完整性检查；输出使用 `--check` 生成完整性表。生成工具、版本和许可同下，未加入运行依赖。
+
+分卷 SHA-256 分别为 `e096cc19b36fdaf29510173bad6b3e5eb8c570dcbf2327f24a985c76463c0e28`、`dfc6650b1ab7a1a510d842ba8f18f7a4449dcd473ebc816b66f4e6838840eca9`。两卷仍只包含本项目测试文本和合成系统元数据，按 MIT 提供，不是 Windows 安装介质。标准测试调用真实 `WIMGetAttributes` 读取每卷总数/编号/集合标识，读取第一卷的索引 1，并验证只保留第一卷时检测出缺少末卷；六阶段文件集成通过测试子进程复制这两卷作为 DISM 替身，不将其记录为真实 DISM 拆分通过。
+
 `metadata.wim` 是仅包含 `payload.txt` 的合成 WIM，不包含 Windows 系统文件，不能用来安装 Windows。样本及正文按本项目 MIT 许可证提供。其 Windows 11 Education / 26300.9457 元数据只是测试数据，用于调用系统 WIMGAPI 的真实只读打开、临时目录设置、索引 1 加载和信息读取接口。
 
 样本为 XPRESS 格式，2,058 字节，SHA-256：`e65972cffda846671fc7c28b00f11ff5b82999ad941778fd0e2d088156347c4b`。

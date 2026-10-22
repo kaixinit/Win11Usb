@@ -1,0 +1,3 @@
+--self-check EXIT_CODE=0
+--list-disks EXIT_CODE=0
+--dependency-report EXIT_CODE=0

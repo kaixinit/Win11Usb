@@ -65,6 +65,7 @@ struct Fake final : Backend {
         Call(L"prepare");
         Prepared p;
         p.work = L"TEST";
+        p.staging = L"X:\\staging";
         p.plan.split = split;
         p.plan.total = 8 * GiB;
         p.plan.files = {F(L"sources\\install.wim", split ? 8 * GiB : 100)};
@@ -80,14 +81,15 @@ struct Fake final : Backend {
     }
     std::vector<File> Split(const Prepared &, const Hooks &, std::atomic<bool> &) override {
         Call(L"split");
-        return {F(L"install.swm", 4000 * MiB), F(L"install2.swm", 3800 * MiB)};
+        return {{L"X:\\staging\\install.swm", L"install.swm", 4000 * MiB},
+                {L"X:\\staging\\install2.swm", L"install2.swm", 3800 * MiB}};
     }
     void Copy(const Request &, const Prepared &, const std::wstring &, const std::vector<File> &,
               const Hooks &, std::atomic<bool> &) override {
         Call(L"copy");
     }
     void Verify(const Request &, const Prepared &, const std::wstring &, const std::vector<File> &,
-                std::atomic<bool> &) override {
+                const Hooks &, std::atomic<bool> &) override {
         Call(L"verify");
     }
     void Cleanup(const Prepared &, const std::vector<File> &) override { Call(L"cleanup"); }
@@ -288,6 +290,27 @@ void FileTests(const std::wstring &root) {
             "production copy and directory creation work through real volume-GUID paths");
     Reject([&] { CopyFilesNative(files, root + L"\\target\\", h, stop); },
            "native copy refuses to overwrite unknown existing file");
+    auto corrupt = std::wstring(128 * 1024, L'B');
+    corrupt[1024] = L'C';
+    WriteUtf8(root + L"\\target\\boot.bin", corrupt);
+    Reject([&] { VerifyFilesNative(files, root + L"\\target\\", stop); },
+           "same-length content corruption is rejected by actual readback");
+    WriteUtf8(root + L"\\target\\boot.bin", std::wstring(128 * 1024, L'B'));
+    int pinned = 0, verifiedProgress = 0;
+    Hooks verify;
+    verify.log = [&](const std::wstring &) {
+        Handle writing(CreateFileW((root + L"\\target\\boot.bin").c_str(), GENERIC_WRITE,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+        if (!writing.valid())
+            pinned++;
+    };
+    verify.progress = [&](const Progress &p) {
+        if (p.stage == 5 && p.overall >= 0)
+            verifiedProgress++;
+    };
+    VerifyFilesNative(files, root + L"\\target\\", stop, verify);
+    Require(pinned >= 1 && verifiedProgress >= 2,
+            "content verification pins open files against writes and reports stage-five progress");
     WriteUtf8(root + L"\\target\\boot.bin", L"corrupt length");
     Reject([&] { VerifyFilesNative(files, root + L"\\target\\", stop); }, "actual truncated target rejected");
     stop = true;
@@ -763,6 +786,177 @@ void SnapshotTests() {
     Require(LayoutSignature(a) != LayoutSignature(b), "active flag change detected");
     std::cout << "PASS physical identity and partition snapshot guards\n";
 }
+void PostPartitionTests(const std::wstring &root) {
+    const std::wstring guid = L"\\\\?\\Volume{12345678-1234-1234-1234-123456789abc}\\";
+    RebuildFixture f;
+    auto created = f.Snapshot(true);
+    created.partitions = f.expected.partitions;
+    created.partitions[0].active = true;
+    Volume v;
+    v.guid = guid;
+    v.extents.push_back({f.expected.number, MiB, created.partitions[0].size});
+    NewVolumeOps ops;
+    ops.read = [&](bool) { return created; };
+    ops.refresh = [] {};
+    ops.volumes = [&] { return std::vector<Volume>{v}; };
+    ops.now = [&] { return f.tick; };
+    ops.wait = [&](DWORD ms) { f.tick += ms; };
+    auto waitVolume = [&] {
+        return WaitCreatedVolume(f.expected, f.signature, 0x0c, MiB, created.partitions[0].size, ops, f.hooks,
+                                 f.stop);
+    };
+    Require(waitVolume().guid == guid && f.tick == 200,
+            "shared new-volume wait requires two matching layout and volume observations");
+    unsigned probes = 0, volumes = 0;
+    f.tick = 0;
+    ops.read = [&](bool) {
+        probes++;
+        if (probes == 1)
+            throw Error(L"temporary disk query (21)");
+        auto d = created;
+        if (probes == 2) {
+            d.layoutKnown = false;
+            d.probeErrors.push_back(L"layout not ready (21)");
+        }
+        if (probes == 3) {
+            d.partitions.clear();
+        }
+        return d;
+    };
+    ops.volumes = [&] {
+        volumes++;
+        if (volumes == 1)
+            throw Error(L"temporary volume enumeration (21)");
+        return volumes == 2 ? std::vector<Volume>{} : std::vector<Volume>{v};
+    };
+    Require(waitVolume().guid == guid && probes == 7 && volumes == 4,
+            "shared new-volume wait tolerates incomplete layout and delayed volume enumeration");
+    for (int change = 0; change < 6; change++) {
+        f.tick = 0;
+        ops.read = [&](bool) {
+            auto d = created;
+            switch (change) {
+            case 0:
+                d.partitions[0].mbrType = 0x07;
+                break;
+            case 1:
+                d.partitions[0].active = false;
+                break;
+            case 2:
+                d.partitions[0].number = 2;
+                break;
+            case 3:
+                d.partitions[0].offset += 512;
+                break;
+            case 4:
+                d.partitions.push_back(d.partitions[0]);
+                break;
+            case 5:
+                d.serial = L"changed device";
+                d.layoutKnown = false;
+                break;
+            }
+            return d;
+        };
+        Reject([&] { waitVolume(); }, "known wrong partition or changed device never reaches formatting");
+        Require(f.tick == 0, "known wrong new layout aborts immediately");
+    }
+    ops.read = [&](bool) { return created; };
+    for (bool ambiguous : {false, true}) {
+        f.tick = 0;
+        ops.volumes = [&] {
+            auto wrong = v;
+            wrong.extents[0].offset++;
+            return ambiguous ? std::vector<Volume>{v, v} : std::vector<Volume>{wrong};
+        };
+        Reject([&] { waitVolume(); }, "wrong or ambiguous volume GUID mapping times out without format");
+        Require(f.tick == 30000, "new-volume wait is bounded at thirty seconds");
+    }
+    f.stop = true;
+    Reject([&] { waitVolume(); }, "new-volume wait honors cancellation");
+    f.stop = false;
+    Prepared p;
+    p.image.label = L"WIN11_26H2";
+    Request request;
+    request.disk = f.expected;
+    auto args = FormatArguments(request, p, guid, MiB, created.partitions[0].size);
+    Require(args.size() == 6 && args[0] == L"--confirmed-volume" && args[1] == guid.substr(0, 48) &&
+                args[2] == L"3" && args[5] == L"512",
+            "FAT32 uses only explicit volume GUID and independently checked physical extent arguments");
+    request.fs = L"NTFS";
+    args = FormatArguments(request, p, guid, MiB, created.partitions[0].size);
+    Require(args[0] == guid && std::find(args.begin(), args.end(), L"/Y") != args.end() &&
+                std::find(args.begin(), args.end(), L"/V:WIN11_26H2") != args.end(),
+            "NTFS formatting supplies noninteractive switch and label without pipe-input guesses");
+    Reject([&] { FormatArguments(request, p, L"C:\\", MiB, created.partitions[0].size); },
+           "format builder rejects drive-letter or arbitrary path targets");
+    p.image.label = L"bad label";
+    Reject([&] { FormatArguments(request, p, guid, MiB, created.partitions[0].size); },
+           "format builder rejects unsafe label before child execution");
+    VolumeState state{L"FAT32", L"NO NAME", 6 * GiB, 8 * GiB, 32768};
+    f.tick = 0;
+    unsigned fsReads = 0, validations = 0;
+    auto probe = [&]() -> VolumeState {
+        if (++fsReads <= 3)
+            throw Error(L"filesystem recognizer not ready (1005)");
+        return state;
+    };
+    auto validate = [&] { validations++; };
+    auto fs = WaitFileSystem(L"FAT32", probe, validate, f.hooks, f.stop, ops.now, ops.wait);
+    Require(fs.fs == L"FAT32" && fsReads == 4 && validations == 4,
+            "filesystem recognition delay retries while revalidating target every time");
+    state.fs = L"NTFS";
+    Reject([&] { WaitFileSystem(L"FAT32", [&] { return state; }, validate, {}, f.stop, ops.now, ops.wait); },
+           "wrong actual formatted filesystem is not silently accepted");
+    state.fs = L"FAT32";
+    Reject(
+        [&] {
+            WaitFileSystem(
+                L"FAT32", [&] { return state; }, [] { throw Error(L"changed target"); }, {}, f.stop, ops.now,
+                ops.wait);
+        },
+        "target identity failure is never caught as transient filesystem delay");
+    state.cluster = 0;
+    f.tick = 0;
+    Reject([&] { WaitFileSystem(L"FAT32", [&] { return state; }, validate, {}, f.stop, ops.now, ops.wait); },
+           "invalid cluster information prevents copy and is bounded");
+    Require(f.tick == 30000, "filesystem readiness timeout is thirty seconds");
+    auto files = std::vector<File>{F(L"a.txt", 1), F(L"dir\\b.txt", 32769)};
+    Require(RequiredCopyBytes(files, 32768) == 64 * MiB + 3 * 32768,
+            "copy preflight includes per-file allocation rounding and reserve");
+    files[0].size = UINT64_MAX;
+    Reject([&] { RequiredCopyBytes(files, 32768); }, "copy capacity arithmetic rejects overflow");
+    Reject([&] { RequiredCopyBytes({F(L"a", 1)}, 0); }, "copy does not guess unknown cluster size");
+    auto target = root + L"\\manifest-output\\";
+    MakeDirectory(target);
+    auto source = root + L"\\manifest-source.txt";
+    WriteUtf8(source, L"safe source");
+    File first{source, L"first.txt", FileSize(source)};
+    for (auto path : {L"..\\outside.txt", L"dir\\..", L".\\file", L"\\absolute", L"X:relative", L"a//b",
+                      L"dir\\\\file", L"dir.\\file", L"dir\\trailing ", L"dir\\file:stream"}) {
+        auto bad = first;
+        bad.relative = path;
+        Reject([&] { CopyFilesNative({first, bad}, target, {}, f.stop); },
+               "entire relative manifest is validated before first destination write");
+        Require(!FileExists(target + first.relative), "unsafe later file cannot cause partial earlier copy");
+    }
+    Reject([&] { ManifestBytes({first, first}); }, "duplicate copy destinations are rejected upfront");
+    auto conflict = first;
+    conflict.relative = L"first.txt\\child";
+    Reject([&] { ManifestBytes({first, conflict}); }, "file-directory manifest collision rejected upfront");
+    Prepared split;
+    split.plan.split = true;
+    split.staging = root + L"\\own-staging";
+    split.plan.files = {F(L"sources\\install.wim", 8 * GiB)};
+    std::vector<File> swm = {{split.staging + L"\\install.swm", L"install.swm", 100}};
+    Require(InstallationFiles(split, swm)[0].relative == L"sources\\install.swm",
+            "validated split manifest replaces WIM with SWM under sources");
+    swm[0].full = root + L"\\other-task\\install.swm";
+    Reject([&] { InstallationFiles(split, swm); }, "SWM outside own staging cannot enter copy manifest");
+    Reject([&] { InstallationFiles(split, {}); },
+           "missing split output cannot remove WIM then report success");
+    std::cout << "PASS post-partition production waits, format arguments, allocation and copy manifests\n";
+}
 void XmlTests() {
     auto d = ParseWimXml(
         L"<IMAGE INDEX=\"1\"><NAME>Windows 11 Education</NAME><DESCRIPTION>教育版 &amp; "
@@ -1006,6 +1200,7 @@ void WorkspaceTests(const std::wstring &root) {
 struct FileWorkflow final : Backend {
     std::wstring base, source, output;
     bool split, formatted = false, copied = false, ejected = false, failPreflight = false;
+    std::wstring fault;
     std::unique_ptr<TaskWorkspace> task;
     FileWorkflow(std::wstring b, std::wstring s, bool split)
         : base(std::move(b)), source(std::move(s)), split(split) {
@@ -1042,21 +1237,29 @@ struct FileWorkflow final : Backend {
     }
     std::vector<File> Split(const Prepared &p, const Hooks &h, std::atomic<bool> &stop) override {
         auto args = PrepareSplitArguments(p, *task);
-        args.insert(args.begin(), {L"--child-split-fixture", p.staging});
+        args.insert(args.begin(), {L"--child-split-fixture", p.staging,
+                                   Parent(Parent(ExePath())) + L"\\tests\\fixtures\\split"});
         CommandRunner command;
         command.Run(ExePath(), args, p.work, p.work + L"\\split-command.log", h, stop, 10000);
         auto swm = ListFiles(p.staging + L"\\", stop);
+        if (fault == L"oversize-swm")
+            swm[0].size = Fat32Limit + 1;
+        if (fault == L"missing-last")
+            swm.pop_back();
         CheckSwm(swm);
+        CheckSplitParts(swm, stop);
         return swm;
     }
     void Copy(const Request &, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
               const Hooks &h, std::atomic<bool> &stop) override {
         CopyFilesNative(InstallationFiles(p, swm), output, h, stop);
+        if (fault == L"corrupt-copy")
+            WriteUtf8(output + L"efi\\boot\\bootx64.efi", L"fail EFI");
         copied = true;
     }
     void Verify(const Request &, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
-                std::atomic<bool> &stop) override {
-        VerifyFilesNative(InstallationFiles(p, swm), output, stop);
+                const Hooks &h, std::atomic<bool> &stop) override {
+        VerifyFilesNative(InstallationFiles(p, swm), output, stop, h);
     }
     void Cleanup(const Prepared &, const std::vector<File> &swm) override { task->CleanupSwm(swm); }
     void EjectUsb(const Request &, const std::wstring &) override { ejected = true; }
@@ -1083,6 +1286,8 @@ void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
             Hooks h;
             h.ask = [](Prompt, const std::wstring &) { return true; };
             auto result = RunWorkflow(request, backend, h, stop);
+            if (!result.error.empty())
+                std::cerr << "File integration error: " << Utf8(result.error) << '\n';
             Require(result.copied && result.error.empty() && backend.ejected,
                     "six-stage file integration completes with shared production path functions");
             Require(FileExists(backend.output + L"sources\\install.wim") != split &&
@@ -1091,6 +1296,37 @@ void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
             std::atomic<bool> scan = false;
             Require(ListFiles(backend.task->Directory(L"staging") + L"\\", scan).empty(),
                     "post-copy cleanup clears own SWM while copied installation files remain");
+        }
+    for (auto fs : {L"FAT32", L"NTFS"})
+        for (auto fault :
+             {L"oversize-swm", L"missing-last", L"corrupt-copy", L"cancel-copy", L"cancel-verify"}) {
+            auto base = root + L"\\file-flow-" + fs + L"-" + fault;
+            MakeDirectory(base);
+            auto source = root + L"\\file-flow-FAT32-small\\media\\";
+            auto request = TestRequest(fs);
+            request.disk.number = MAXDWORD;
+            request.iso = L"windows_11_26h2.iso";
+            FileWorkflow backend(base, source, true);
+            backend.fault = fault;
+            std::atomic<bool> stop = false;
+            Hooks h;
+            h.ask = [](Prompt, const std::wstring &) { return true; };
+            h.progress = [&](const Progress &p) {
+                if ((backend.fault == L"cancel-copy" && p.stage == 4 && p.overall >= 0) ||
+                    (backend.fault == L"cancel-verify" && p.stage == 5 && p.overall >= 0))
+                    stop = true;
+            };
+            auto result = RunWorkflow(request, backend, h, stop);
+            Require(!result.copied && !backend.ejected && !result.error.empty(),
+                    "actual file pipeline failures and cancellation never report success or eject");
+            std::atomic<bool> scan = false;
+            Require(ListFiles(backend.task->Directory(L"staging") + L"\\", scan).size() == 2,
+                    "failed split/copy/verify preserves staged SWMs for diagnosis");
+            if (backend.fault == L"oversize-swm" || backend.fault == L"missing-last")
+                Require(!backend.copied, "malformed split set stops before copying any installation files");
+            if (backend.fault == L"corrupt-copy")
+                Require(result.error.find(L"内容不一致") != result.error.npos,
+                        "same-sized copied EFI corruption is detected by the complete six-stage pipeline");
         }
     auto failureBase = root + L"\\file-flow-preflight-failure";
     MakeDirectory(failureBase);
@@ -1214,9 +1450,11 @@ int wmain(int argc, wchar_t **argv) {
             std::cout << "injected component preflight error\n";
             return 7;
         }
-        if (argc >= 3 && std::wstring(argv[1]) == L"--child-split-fixture") {
-            WriteUtf8(std::wstring(argv[2]) + L"\\install.swm", L"synthetic first SWM");
-            WriteUtf8(std::wstring(argv[2]) + L"\\install2.swm", L"synthetic second SWM");
+        if (argc >= 4 && std::wstring(argv[1]) == L"--child-split-fixture") {
+            for (auto name : {L"install.swm", L"install2.swm"})
+                if (!CopyFileW((std::wstring(argv[3]) + L"\\" + name).c_str(),
+                               (std::wstring(argv[2]) + L"\\" + name).c_str(), TRUE))
+                    return 9;
             std::cout << "test split output ready\n";
             return 0;
         }
@@ -1269,9 +1507,25 @@ int wmain(int argc, wchar_t **argv) {
         StorageCompatibilityTests();
         LayoutReadTests();
         RebuildTests(root);
+        PostPartitionTests(root);
         XmlTests();
         FileTests(root);
         WimReadTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
+        {
+            std::atomic<bool> stop = false;
+            auto parts = ListFiles(Parent(FullPath(argv[1])) + L"\\fixtures\\split\\", stop);
+            CheckSplitParts(parts, stop);
+            Require(parts.size() == 2, "real two-part WIM fixture passes native WIMGetAttributes checks");
+            auto identity =
+                ReadWimIdentity(parts[0].full, L"windows_11_26h2.iso", root + L"\\split-wim-temp");
+            Require(identity.arch == 9 && identity.label == L"WIN11_26H2",
+                    "first part of a real split set supports production temporary-path and metadata loading");
+            parts.pop_back();
+            Reject(
+                [&] { CheckSplitParts(parts, stop); },
+                "missing last split part is detected even when remaining filename numbering is contiguous");
+            std::cout << "PASS actual WIMGAPI split header and missing-last-part checks\n";
+        }
         WimTaskTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
         WorkspaceTests(root);
         FileWorkflowTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");

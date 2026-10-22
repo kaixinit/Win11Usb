@@ -9,7 +9,7 @@ std::wstring ChildPath(const std::wstring &base, const std::wstring &name) {
 std::wstring NewId() {
     GUID id{};
     if (FAILED(CoCreateGuid(&id)))
-        throw Error(L"无法生成本次临时文件编号。尚未清盘。");
+        throw Error(L"无法生成本次临时文件编号，停止当前操作。");
     wchar_t name[40];
     StringFromGUID2(id, name, 40);
     return std::wstring(name + 1, 36);

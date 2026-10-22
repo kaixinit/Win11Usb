@@ -12,6 +12,11 @@ Modified by Win11Usb contributors on 2026-10-22:
 - independently verifies that volume's physical extent before any write.
 - removes the original drive-letter command interface and interactive prompt.
 - checks partial writes, flushes output, fixes error exit and allocation handling.
+- uses checked 64-bit sector seeks; rejects incomplete extent/geometry responses.
+- requires the already-created MBR FAT32 type and matching hidden-sector offset;
+  does not rewrite partition types after formatting.
+- file-only tests reuse the production formatter for 8/64 GiB and 512/4096-byte
+  sectors. Storage IOCTLs in those tests are replaced; they are not USB acceptance.
 
 This GPL program runs as a separate process. It is not linked into the MIT
 application. Its executable, complete modified C source, original source ZIP,

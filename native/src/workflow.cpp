@@ -1,4 +1,4 @@
-#include "win11usb.hpp"
+#include "platform.hpp"
 #include <sstream>
 
 namespace wu {
@@ -67,18 +67,7 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
             log(L"完成：本机生成 " + std::to_wstring(swm.size()) + L" 个 SWM 文件。");
         } else
             log(L"install.wim 未超过阈值或介质已提供合规 ESD/SWM，跳过拆分。");
-        uint64_t total = 0;
-        for (auto &f : p.plan.files)
-            if (!p.plan.split || Lower(f.relative) != L"sources\\install.wim") {
-                if (UINT64_MAX - total < f.size)
-                    throw Error(L"复制大小溢出。");
-                total += f.size;
-            }
-        for (auto &f : swm) {
-            if (UINT64_MAX - total < f.size)
-                throw Error(L"拆分大小溢出。");
-            total += f.size;
-        }
+        uint64_t total = ManifestBytes(InstallationFiles(p, swm));
         if (total > r.disk.size || r.disk.size - total < 128 * MiB)
             throw Error(L"拆分后容量不足，停止复制。");
         if (!ask(Prompt::Copy, L"将复制安装文件" + std::wstring(p.plan.split ? L"和全部 SWM 分卷" : L"") +
@@ -89,9 +78,9 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
         backend.Copy(r, p, target, swm, h, stop);
         stage(5, L"检查复制结果");
         backend.Validate(r, p, false);
-        backend.Verify(r, p, target, swm, stop);
+        backend.Verify(r, p, target, swm, h, stop);
         result.copied = true;
-        log(L"复制文件大小校验通过，efi\\boot\\bootx64.efi 已就绪。");
+        log(L"安装文件大小和内容校验通过，efi\\boot\\bootx64.efi 已就绪。");
         stage(6, L"清理本次临时 SWM");
         if (swm.empty())
             log(L"本次未拆分映像，自动跳过 SWM 清理。");

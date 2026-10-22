@@ -41,12 +41,6 @@ std::wstring WorkBase() {
     CoTaskMemFree(raw);
     return base;
 }
-uint64_t FreeBytes(const std::wstring &path) {
-    ULARGE_INTEGER free{};
-    if (!GetDiskFreeSpaceExW(path.c_str(), &free, nullptr, nullptr))
-        throw Error(L"无法确认可用容量：" + WinError());
-    return free.QuadPart;
-}
 struct IsoMount {
     Module library{L"virtdisk.dll"};
     Handle disk;
@@ -140,6 +134,7 @@ struct IsoMount {
 class NativeBackend final : public Backend {
     std::unique_ptr<IsoMount> iso;
     Handle sourceFile, helperPin;
+    std::vector<Handle> splitPins;
     CommandRunner commands;
     std::wstring volume, afterLayout, helper, work;
     uint64_t partitionOffset = MiB, partitionSize = 0;
@@ -170,35 +165,54 @@ class NativeBackend final : public Backend {
             }
         throw Error(L"目标卷已移除，停止写入。");
     }
-    void WaitVolume(const Request &r, const Hooks &h, std::atomic<bool> &stop) {
-        uint64_t start = GetTickCount64(), last = start;
-        while (GetTickCount64() - start < 30000) {
-            CheckCancel(stop);
-            auto now = RecheckDisk(r.disk, false);
-            if (GetTickCount64() - last > 5000) {
-                if (h.log)
-                    h.log(L"正在等待新分区卷就绪…");
-                last = GetTickCount64();
+    void WaitVolume(const Request &r, const Hooks &h, std::atomic<bool> &stop, HANDLE disk, DWORD signature) {
+        NewVolumeOps ops;
+        ops.read = [&](bool layout) { return ReadDisk(r.disk.path, r.disk.pnp, layout); };
+        ops.refresh = [&] { Io(disk, IOCTL_DISK_UPDATE_PROPERTIES); };
+        ops.volumes = [] { return ReadVolumes(); };
+        auto v = WaitCreatedVolume(r.disk, signature, r.fs == L"FAT32" ? 0x0c : 0x07, partitionOffset,
+                                   partitionSize, ops, h, stop);
+        volume = v.guid;
+        auto now = ReadDisk(r.disk.path, r.disk.pnp);
+        if (!SameIdentity(r.disk, now) || !CreatedPartitionReady(now, partitionOffset, partitionSize) ||
+            now.tableId != std::to_wstring(signature) ||
+            now.partitions[0].mbrType != (r.fs == L"FAT32" ? 0x0c : 0x07) || !now.partitions[0].active ||
+            now.partitions[0].number != 1)
+            throw Error(L"新分区卷就绪后的设备复核失败，未进行格式化。");
+        afterLayout = now.layout;
+        for (auto &path : v.paths) {
+            wchar_t mounted[MAX_PATH]{};
+            if (!GetVolumeNameForVolumeMountPointW(path.c_str(), mounted, MAX_PATH)) {
+                DWORD error = GetLastError();
+                if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+                    continue;
+                throw Error(L"不能复核新分区挂载点：" + WinError(error));
             }
-            if (!now.partitions.empty() && !CreatedPartitionReady(now, partitionOffset, partitionSize))
-                throw Error(L"新分区布局核验失败。");
-            if (!CreatedPartitionReady(now, partitionOffset, partitionSize)) {
-                Sleep(100);
-                continue;
-            }
-            for (auto &v : ReadVolumes())
-                if (v.extents.size() == 1 && v.extents[0].disk == r.disk.number &&
-                    v.extents[0].offset == partitionOffset && v.extents[0].size == partitionSize) {
-                    volume = v.guid;
-                    for (auto &path : v.paths)
-                        if (!DeleteVolumeMountPointW(path.c_str()))
-                            throw Error(L"不能暂时移除新分区盘符：" + WinError());
-                    afterLayout = now.layout;
-                    return;
-                }
-            Sleep(100);
+            if (Lower(mounted) != Lower(volume))
+                throw Error(L"新分区原挂载点已分配给其他卷，停止移除挂载点。");
+            if (!DeleteVolumeMountPointW(path.c_str()))
+                throw Error(L"不能暂时移除新分区盘符：" + WinError());
         }
-        throw Error(L"等待新分区卷超时；未进行格式化。");
+    }
+    VolumeState FileSystemState() {
+        VolumeState state;
+        wchar_t fs[64]{}, label[64]{};
+        if (!GetVolumeInformationW(volume.c_str(), label, 64, nullptr, nullptr, nullptr, fs, 64))
+            throw Error(L"读取新卷文件系统失败：" + WinError());
+        state.fs = fs;
+        state.label = label;
+        DWORD sectors = 0, bytes = 0, freeClusters = 0, clusters = 0;
+        ULARGE_INTEGER free{}, total{};
+        if (!GetDiskFreeSpaceW(volume.c_str(), &sectors, &bytes, &freeClusters, &clusters) ||
+            !GetDiskFreeSpaceExW(volume.c_str(), &free, &total, nullptr))
+            throw Error(L"读取新卷分配单元或可用容量失败：" + WinError());
+        uint64_t cluster = (uint64_t)sectors * bytes;
+        if (cluster > MAXDWORD)
+            throw Error(L"新卷分配单元大小无效。");
+        state.cluster = (DWORD)cluster;
+        state.free = free.QuadPart;
+        state.total = total.QuadPart;
+        return state;
     }
 
   public:
@@ -233,6 +247,8 @@ class NativeBackend final : public Backend {
         p.source = iso->Mount(r.iso, h, stop);
         auto files = ListFiles(p.source, stop);
         p.plan = PlanImages(p.source, files);
+        if (Lower(BaseName(p.plan.images[0].full)) == L"install.swm")
+            CheckSplitParts(p.plan.images, stop);
         for (auto path : {L"setup.exe", L"sources\\boot.wim", L"efi\\boot\\bootx64.efi"})
             if (!FileExists(p.source + path) || !FileSize(p.source + path))
                 throw Error(std::wstring(L"ISO 缺少 x64 安装启动文件：") + path + L"，尚未清盘。");
@@ -403,30 +419,27 @@ class NativeBackend final : public Backend {
         CheckCancel(stop);
         Io(disk, IOCTL_DISK_SET_DRIVE_LAYOUT_EX, layout, (DWORD)buffer.size());
         Io(disk, IOCTL_DISK_UPDATE_PROPERTIES);
+        WaitVolume(r, h, stop, disk, create.Mbr.Signature);
         disk.reset();
-        WaitVolume(r, h, stop);
         CheckCancel(stop);
         TargetVolume(r);
         if (h.log)
             h.log(L"新分区已核验。使用卷 GUID 格式化，成功前不主动分配盘符。");
+        auto formatArgs = FormatArguments(r, p, volume, partitionOffset, partitionSize);
         if (r.fs == L"FAT32")
-            commands.Run(helper,
-                         {L"--confirmed-volume", Bare(volume), std::to_wstring(r.disk.number),
-                          std::to_wstring(partitionOffset), std::to_wstring(partitionSize),
-                          std::to_wstring(r.disk.sector)},
-                         p.work, p.work + L"\\fat32format.log", h, stop, 15 * 60 * 1000);
+            commands.Run(helper, formatArgs, p.work, p.work + L"\\fat32format.log", h, stop, 15 * 60 * 1000);
         else
-            commands.Run(SystemFile(L"format.com"),
-                         {volume, L"/FS:NTFS", L"/Q", L"/X", L"/V:" + p.image.label}, p.work,
-                         p.work + L"\\format-ntfs.log", h, stop, 15 * 60 * 1000, "Y\r\n\r\n");
-        TargetVolume(r);
+            commands.Run(SystemFile(L"format.com"), formatArgs, p.work, p.work + L"\\format-ntfs.log", h,
+                         stop, 15 * 60 * 1000);
+        auto state =
+            WaitFileSystem(r.fs, [&] { return FileSystemState(); }, [&] { TargetVolume(r); }, h, stop);
         if (!SetVolumeLabelW(volume.c_str(), p.image.label.c_str()))
             throw Error(L"文件系统已格式化，但卷标设置失败：" + WinError());
         wchar_t fs[64], label[64];
         if (!GetVolumeInformationW(volume.c_str(), label, 64, nullptr, nullptr, nullptr, fs, 64) ||
             std::wstring(fs) != r.fs || std::wstring(label) != p.image.label)
             throw Error(L"文件系统或卷标复核未通过，停止复制。");
-        if (FreeBytes(volume) < p.plan.total && !p.plan.split)
+        if (!p.plan.split && state.free < RequiredCopyBytes(InstallationFiles(p, {}), state.cluster))
             throw Error(L"格式化后的实际可用容量不足。");
         std::wstring letter{p.letter, L':', L'\\'};
         DWORD used = GetLogicalDrives();
@@ -447,26 +460,40 @@ class NativeBackend final : public Backend {
         commands.Run(SystemFile(L"dism.exe"), args, p.work, p.work + L"\\dism-split.log", h, stop);
         auto files = ListFiles(p.staging + L"\\", stop);
         CheckSwm(files);
+        for (const auto &f : files) {
+            Handle pin(CreateFileW(f.full.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                   FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            if (!pin.valid())
+                throw Error(L"不能固定本次 SWM 文件身份：" + WinError());
+            splitPins.push_back(std::move(pin));
+        }
+        CheckSplitParts(files, stop);
         return files;
     }
     void Copy(const Request &r, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
               const Hooks &h, std::atomic<bool> &stop) override {
         TargetVolume(r);
         auto files = InstallationFiles(p, swm);
-        uint64_t total = 0;
-        for (auto &f : files) {
-            if (UINT64_MAX - total < f.size)
-                throw Error(L"文件容量溢出。");
-            total += f.size;
-        }
-        if (FreeBytes(volume) < total + 64 * MiB)
+        auto state = FileSystemState();
+        if (Lower(state.fs) != Lower(r.fs) || state.label != p.image.label)
+            throw Error(L"复制前文件系统或卷标已变化。");
+        auto required = RequiredCopyBytes(files, state.cluster);
+        if (h.log)
+            h.log(L"复制空间预检：按分配单元估算需要 " + FormatSize(required) + L"，实际可用 " +
+                  FormatSize(state.free));
+        if (state.free < required)
             throw Error(L"目标文件系统实际空间不足。");
         CopyFilesNative(files, volume, h, stop);
     }
     void Verify(const Request &r, const Prepared &p, const std::wstring &, const std::vector<File> &swm,
-                std::atomic<bool> &stop) override {
+                const Hooks &hooks, std::atomic<bool> &stop) override {
         TargetVolume(r);
-        VerifyFilesNative(InstallationFiles(p, swm), volume, stop);
+        Handle cache(CreateFileW(Bare(volume).c_str(), GENERIC_READ | GENERIC_WRITE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
+        if (!cache.valid() || !FlushFileBuffers(cache))
+            throw Error(L"校验前目标卷写入缓存刷新失败：" + WinError());
+        cache.reset();
+        VerifyFilesNative(InstallationFiles(p, swm), volume, stop, hooks);
         for (auto f : {L"efi\\boot\\bootx64.efi", L"sources\\boot.wim", L"setup.exe"})
             if (!FileSize(volume + f))
                 throw Error(L"关键安装启动文件校验失败。");
@@ -476,6 +503,8 @@ class NativeBackend final : public Backend {
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
         if (!h.valid() || !FlushFileBuffers(h))
             throw Error(L"目标卷写入缓存刷新失败：" + WinError());
+        TargetVolume(r);
+        splitPins.clear();
     }
     void Cleanup(const Prepared &p, const std::vector<File> &swm) override {
         if (!workspace || p.work != work || Lower(p.staging) != Lower(workspace->Directory(L"staging")))
@@ -512,6 +541,8 @@ class NativeBackend final : public Backend {
     void Abort(bool forced) noexcept override {
         aborted = true;
         commands.Kill();
+        if (!forced)
+            splitPins.clear();
         if (!forced && iso && iso->owned) {
             try {
                 iso->Detach();

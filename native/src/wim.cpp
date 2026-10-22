@@ -91,6 +91,9 @@ ImageIdentity ReadWimIdentity(const std::wstring &image, const std::wstring &iso
     auto load = m.Proc<HANDLE(WINAPI *)(HANDLE, DWORD)>("WIMLoadImage");
     auto info = m.Proc<BOOL(WINAPI *)(HANDLE, PVOID *, PDWORD)>("WIMGetImageInformation");
     auto close = m.Proc<BOOL(WINAPI *)(HANDLE)>("WIMCloseHandle");
+    // The later split-header check uses this export. Discover stripped-system
+    // component failures during metadata preflight, before destructive operations.
+    m.Proc<BOOL(WINAPI *)(HANDLE, PVOID, DWORD)>("WIMGetAttributes");
     DWORD disposition = 0;
     WimHandle file{create(image.c_str(), GENERIC_READ, OPEN_EXISTING, 0, 0, &disposition), close};
     if (!file.value || file.value == INVALID_HANDLE_VALUE)
@@ -131,5 +134,42 @@ ImageIdentity ReadTaskWimIdentity(const std::wstring &image, const std::wstring 
     TaskWorkspace workspace(work, target);
     auto scratch = workspace.Directory(L"wim-temp");
     return ReadWimIdentity(image, iso, scratch, hooks);
+}
+void CheckSplitParts(const std::vector<File> &files, std::atomic<bool> &stop) {
+    CheckSwm(files);
+    // SDK WIM_INFO layout; this toolchain does not ship wimgapi.h.
+    struct WimInfo {
+        WCHAR path[MAX_PATH];
+        GUID guid;
+        DWORD images, compression;
+        USHORT part, total;
+        DWORD boot, attributes, flags;
+    };
+    static_assert(sizeof(WimInfo) == 560, "WIM_INFO ABI");
+    Module m(L"wimgapi.dll");
+    auto create = m.Proc<HANDLE(WINAPI *)(PCWSTR, DWORD, DWORD, DWORD, DWORD, PDWORD)>("WIMCreateFile");
+    auto attributes = m.Proc<BOOL(WINAPI *)(HANDLE, PVOID, DWORD)>("WIMGetAttributes");
+    auto close = m.Proc<BOOL(WINAPI *)(HANDLE)>("WIMCloseHandle");
+    GUID set{};
+    bool first = true;
+    for (const auto &f : files) {
+        CheckCancel(stop);
+        if (FileSize(f.full) != f.size)
+            throw Error(L"SWM 文件大小变化：" + f.full);
+        DWORD disposition = 0;
+        WimHandle file{create(f.full.c_str(), GENERIC_READ, OPEN_EXISTING, 0, 0, &disposition), close};
+        WimInfo info{};
+        if (!file.value || file.value == INVALID_HANDLE_VALUE || !attributes(file.value, &info, sizeof(info)))
+            throw Error(L"SWM 文件头无法读取：" + f.full + L"\n" + WinError());
+        auto name = Lower(BaseName(f.full));
+        unsigned number = name == L"install.swm" ? 1u : (unsigned)std::stoi(name.substr(7, name.size() - 11));
+        if (!info.total || info.total != files.size() || info.part != number ||
+            IsEqualGUID(info.guid, GUID_NULL) || (!first && !IsEqualGUID(set, info.guid)))
+            throw Error(L"SWM 分卷数量、编号或集合标识不一致：" + BaseName(f.full) + L"；文件头=" +
+                        std::to_wstring(info.part) + L"/" + std::to_wstring(info.total) + L"；实际文件数=" +
+                        std::to_wstring(files.size()) + L"。停止复制。");
+        set = info.guid;
+        first = false;
+    }
 }
 } // namespace wu

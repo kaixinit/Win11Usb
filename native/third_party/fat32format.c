@@ -223,12 +223,10 @@ DWORD get_fat_size_sectors ( DWORD DskSize, DWORD ReservedSecCnt, DWORD SecPerCl
 
 void seek_to_sect( HANDLE hDevice, DWORD Sector, DWORD BytesPerSect )
 {
-	LONGLONG Offset;
-	LONG HiOffset;
-    
-    Offset = Sector * BytesPerSect ;
-    HiOffset = (LONG) (Offset>>32);
-    SetFilePointer ( hDevice, (LONG) Offset , &HiOffset , FILE_BEGIN );
+    LARGE_INTEGER Offset;
+    Offset.QuadPart = (LONGLONG)((ULONGLONG)Sector * BytesPerSect);
+    if (Offset.QuadPart < 0 || !SetFilePointerEx(hDevice, Offset, NULL, FILE_BEGIN))
+        die("Failed to seek to the requested sector");
 }
 
 void write_sect ( HANDLE hDevice, DWORD Sector, DWORD BytesPerSector, void *Data, DWORD NumSects )
@@ -340,8 +338,6 @@ int format_volume ( const char* volume, format_params* params,
     DISK_GEOMETRY         dgDrive;
     PARTITION_INFORMATION  piDrive;
 	PARTITION_INFORMATION_EX xpiDrive;
-	BOOL bGPTMode = FALSE;
-    SET_PARTITION_INFORMATION spiDrive;
     // Recommended values
     DWORD ReservedSectCount = 32;
     DWORD NumFATs = 2;
@@ -389,7 +385,7 @@ int format_volume ( const char* volume, format_params* params,
     { VOLUME_DISK_EXTENTS ext;
       if (!DeviceIoControl(hDevice, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
           NULL, 0, &ext, sizeof(ext), &cbRet, NULL) ||
-          ext.NumberOfDiskExtents != 1 || ext.Extents[0].DiskNumber != expected_disk ||
+          cbRet < sizeof(ext) || ext.NumberOfDiskExtents != 1 || ext.Extents[0].DiskNumber != expected_disk ||
           ext.Extents[0].StartingOffset.QuadPart != expected_offset ||
           ext.Extents[0].ExtentLength.QuadPart != expected_length)
           die("Volume extent does not match the explicitly confirmed disk");
@@ -423,36 +419,20 @@ int format_volume ( const char* volume, format_params* params,
         NULL, 0, &dgDrive, sizeof(dgDrive),
         &cbRet, NULL);
 
-    if ( !bRet )
+    if ( !bRet || cbRet < sizeof(dgDrive) )
         die( "Failed to get device geometry" );
 
     bRet = DeviceIoControl ( hDevice, 
-        IOCTL_DISK_GET_PARTITION_INFO,
-        NULL, 0, &piDrive, sizeof(piDrive),
+        IOCTL_DISK_GET_PARTITION_INFO_EX,
+        NULL, 0, &xpiDrive, sizeof(xpiDrive),
         &cbRet, NULL);
-
-	if ( !bRet )
-    {
-		printf ( "IOCTL_DISK_GET_PARTITION_INFO failed, trying IOCTL_DISK_GET_PARTITION_INFO_EX\n" );
-		bRet = DeviceIoControl ( hDevice, 
-			IOCTL_DISK_GET_PARTITION_INFO_EX,
-			NULL, 0, &xpiDrive, sizeof(xpiDrive),
-			&cbRet, NULL);
-  
-			
-		if (!bRet)
-			die( "Failed to get partition info (both regular and _ex)" );
-
-		memset ( &piDrive, 0, sizeof(piDrive) );
-		piDrive.StartingOffset.QuadPart = xpiDrive.StartingOffset.QuadPart;
-		piDrive.PartitionLength.QuadPart = xpiDrive.PartitionLength.QuadPart;
-		piDrive.HiddenSectors = (DWORD) (xpiDrive.StartingOffset.QuadPart / dgDrive.BytesPerSector);
-		
-
-		bGPTMode = ( xpiDrive.PartitionStyle == PARTITION_STYLE_MBR ) ? 0 : 1;
-		printf ( "IOCTL_DISK_GET_PARTITION_INFO_EX ok, GPTMode=%d\n", bGPTMode );
-
-	}
+    if (!bRet || cbRet < sizeof(xpiDrive) || xpiDrive.PartitionStyle != PARTITION_STYLE_MBR ||
+        xpiDrive.Mbr.PartitionType != 0x0c)
+        die("Expected the verified FAT32 MBR partition before formatting");
+    memset(&piDrive, 0, sizeof(piDrive));
+    piDrive.StartingOffset = xpiDrive.StartingOffset;
+    piDrive.PartitionLength = xpiDrive.PartitionLength;
+    piDrive.HiddenSectors = xpiDrive.Mbr.HiddenSectors;
 
     // Only support hard disks at the moment 
     //if ( dgDrive.BytesPerSector != 512 )
@@ -463,7 +443,8 @@ int format_volume ( const char* volume, format_params* params,
     if ((BytesPerSect != 512 && BytesPerSect != 4096) ||
         BytesPerSect != expected_sector ||
         piDrive.StartingOffset.QuadPart != expected_offset ||
-        piDrive.PartitionLength.QuadPart != expected_length)
+        piDrive.PartitionLength.QuadPart != expected_length ||
+        piDrive.HiddenSectors != expected_offset / BytesPerSect)
         die("Partition geometry changed; refusing format");
 
     // Checks on Disk Size
@@ -662,27 +643,8 @@ int format_volume ( const char* volume, format_params* params,
     //    see http://www.48bitlba.com/win98.htm for instructions
 
     if (!FlushFileBuffers(hDevice)) die("Failed to flush formatted volume");
-	// If we have a GPT disk, don't mess with the partition type
-	if ( !bGPTMode )
-		{
-		spiDrive.PartitionType = 0x0c; // FAT32 LBA. 
-		bRet = DeviceIoControl ( hDevice, 
-			IOCTL_DISK_SET_PARTITION_INFO,
-			&spiDrive, sizeof(spiDrive),
-			NULL, 0, 
-			&cbRet, NULL);
-
-		if ( !bRet )
-			{
-			// This happens because the drive is a Super Floppy
-			// i.e. with no partition table. Disk.sys creates a PARTITION_INFORMATION
-			// record spanning the whole disk and then fails requests to set the 
-			// partition info since it's not actually stored on disk. 
-			// So only complain if there really is a partition table to set      
-			if ( piDrive.HiddenSectors  )
-				die( "Failed to set parition info" );
-			}    
-		}
+    // The parent created and verified type 0x0c. Do not rewrite the partition
+    // table from this filesystem-only helper after formatting.
 
     bRet = DeviceIoControl( hDevice, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &cbRet, NULL );
 
@@ -697,6 +659,9 @@ int format_volume ( const char* volume, format_params* params,
 
     // CloseDevice
     CloseHandle( hDevice );
+    VirtualFree(pFAT32BootSect, 0, MEM_RELEASE);
+    VirtualFree(pFAT32FsInfo, 0, MEM_RELEASE);
+    VirtualFree(pFirstSectOfFat, 0, MEM_RELEASE);
 
     printf ( "Done" );
 

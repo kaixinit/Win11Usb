@@ -1,4 +1,4 @@
-#include "win11usb.hpp"
+#include "platform.hpp"
 #include <algorithm>
 #include <regex>
 
@@ -161,6 +161,7 @@ void CheckSwm(const std::vector<File> &files) {
             throw Error(L"SWM 分卷不连续或不完整。");
 }
 ImagePlan PlanImages(const std::wstring &root, const std::vector<File> &files) {
+    ManifestBytes(files);
     ImagePlan p;
     p.files = files;
     const File *wim = nullptr, *esd = nullptr, *swm = nullptr;

@@ -139,4 +139,88 @@ Disk InitializeEmptyMbr(const Disk &expected, DWORD signature, const DiskRebuild
     CheckCancel(stop);
     return poll(true);
 }
+Volume WaitCreatedVolume(const Disk &expected, DWORD signature, BYTE type, uint64_t offset, uint64_t size,
+                         const NewVolumeOps &ops, const Hooks &h, std::atomic<bool> &stop) {
+    if (!expected.eligible() || !expected.bootKnown || expected.system || !signature ||
+        (type != 0x0c && type != 0x07) || !ops.read || !ops.volumes || !ops.refresh)
+        throw Error(L"新分区卷的核验参数不完整，未进行格式化。");
+    auto now = ops.now ? ops.now : std::function<uint64_t()>([] { return GetTickCount64(); });
+    auto wait = ops.wait ? ops.wait : std::function<void(DWORD)>([](DWORD ms) { Sleep(ms); });
+    uint64_t started = now(), lastLog = started;
+    std::wstring detail, previous, candidate;
+    unsigned stable = 0;
+    for (;;) {
+        CheckCancel(stop);
+        bool observed = false;
+        Disk d;
+        try {
+            ops.refresh();
+            d = ops.read(true);
+            observed = true;
+        } catch (const Cancelled &) {
+            throw;
+        } catch (const Error &e) {
+            detail = L"读取新分区失败：" + e.text;
+        }
+        CheckCancel(stop);
+        bool ready = false;
+        Volume selected;
+        if (observed) {
+            detail = State(d, true);
+            auto conflict = IdentityConflict(expected, d);
+            if (!conflict.empty())
+                throw Error(L"新分区核验发现" + conflict + L"，未进行格式化。\n" + detail);
+            if (d.layoutKnown && d.style == PARTITION_STYLE_MBR && d.tableId == std::to_wstring(signature) &&
+                !d.partitions.empty() &&
+                (!CreatedPartitionReady(d, offset, size) || d.partitions[0].mbrType != type ||
+                 !d.partitions[0].active || d.partitions[0].number != 1)) {
+                // Incomplete probes may settle; a fully known wrong new layout is a hard failure.
+                if (d.complete())
+                    throw Error(L"新分区的数量、类型、活动标记或范围不符，未进行格式化。\n" + detail);
+            }
+            if (SameIdentity(expected, d) && CreatedPartitionReady(d, offset, size) &&
+                d.tableId == std::to_wstring(signature) && d.partitions[0].mbrType == type &&
+                d.partitions[0].active && d.partitions[0].number == 1) {
+                try {
+                    unsigned found = 0;
+                    for (const auto &v : ops.volumes())
+                        if (v.extents.size() == 1 && v.extents[0].disk == expected.number &&
+                            v.extents[0].offset == offset && v.extents[0].size == size) {
+                            selected = v;
+                            found++;
+                        }
+                    if (found == 1 && !selected.guid.empty())
+                        ready = true;
+                    else
+                        detail += L"；匹配的新卷数量=" + std::to_wstring(found);
+                } catch (const Cancelled &) {
+                    throw;
+                } catch (const Error &e) {
+                    detail += L"\n卷枚举错误：" + e.text;
+                }
+            }
+        }
+        CheckCancel(stop);
+        if (ready) {
+            if (Lower(candidate) != Lower(selected.guid))
+                stable = 0;
+            candidate = selected.guid;
+            if (++stable == 2 && now() - started < 30000) {
+                if (h.log)
+                    h.log(L"新分区及卷 GUID 已连续核验：" + selected.guid + L"\n" + detail);
+                return selected;
+            }
+        } else
+            stable = 0;
+        if (now() - started >= 30000)
+            throw Error(L"等待新分区卷在 30 秒内就绪失败，未进行格式化。\n" + detail);
+        if (detail != previous || now() - lastLog >= 5000) {
+            if (h.log)
+                h.log(L"等待新分区和卷 GUID 就绪：" + detail);
+            previous = detail;
+            lastLog = now();
+        }
+        wait(200);
+    }
+}
 } // namespace wu

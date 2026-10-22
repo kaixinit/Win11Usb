@@ -190,7 +190,7 @@ class Backend {
     virtual void Copy(const Request &, const Prepared &, const std::wstring &, const std::vector<File> &,
                       const Hooks &, std::atomic<bool> &) = 0;
     virtual void Verify(const Request &, const Prepared &, const std::wstring &, const std::vector<File> &,
-                        std::atomic<bool> &) = 0;
+                        const Hooks &, std::atomic<bool> &) = 0;
     virtual void Cleanup(const Prepared &, const std::vector<File> &) = 0;
     virtual void EjectUsb(const Request &, const std::wstring &) = 0;
     virtual void EjectIso() = 0;
