@@ -30,9 +30,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
             return icon ? 0 : 1;
         }
         auto has = [&](const wchar_t *s) { return std::find(args.begin(), args.end(), s) != args.end(); };
-        bool running = has(L"--preview-running"), empty = has(L"--preview-empty");
-        return RunUi(instance, has(L"--preview") || running || empty || has(L"--preview-dialog"), running,
-                     empty, has(L"--preview-dialog"));
+        bool running = has(L"--preview-running"), empty = has(L"--preview-empty"),
+             blocked = has(L"--preview-blocked");
+        return RunUi(instance, has(L"--preview") || running || empty || blocked || has(L"--preview-dialog"),
+                     running, empty, has(L"--preview-dialog"), blocked);
     } catch (const Error &e) {
         MessageBoxW(nullptr, e.text.c_str(), L"Win11Usb · 启动失败", MB_OK | MB_ICONERROR);
         return 1;

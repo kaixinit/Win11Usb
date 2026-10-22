@@ -14,7 +14,7 @@ constexpr COLORREF Bg = RGB(250, 252, 255), Ink = RGB(23, 43, 72), Muted = RGB(1
 constexpr UINT WM_CATALOG = WM_APP + 10, WM_LOG_LINE = WM_APP + 11, WM_PROGRESS_VALUE = WM_APP + 12,
                WM_PROMPT_VALUE = WM_APP + 13, WM_FINISHED = WM_APP + 14, WM_WORK_PATH = WM_APP + 15,
                WM_PREVIEW_DIALOG = WM_APP + 16;
-enum { ID_ISO = 101, ID_REFRESH, ID_DISK, ID_FAT, ID_NTFS, ID_START, ID_STOP, ID_LOG };
+enum { ID_ISO = 101, ID_REFRESH, ID_DISK, ID_FAT, ID_NTFS, ID_START, ID_STOP, ID_LOG, ID_EXPORT };
 struct Ui;
 void Fill(HDC dc, RECT r, COLORREF c) {
     HBRUSH b = CreateSolidBrush(c);
@@ -207,12 +207,12 @@ struct PromptMessage {
 struct Ui {
     HINSTANCE instance;
     HWND window = nullptr, isoButton = nullptr, refresh = nullptr, combo = nullptr, fat = nullptr,
-         ntfs = nullptr, start = nullptr, stopButton = nullptr, log = nullptr;
+         ntfs = nullptr, start = nullptr, stopButton = nullptr, log = nullptr, exportButton = nullptr;
     HFONT font = nullptr, small = nullptr, bold = nullptr, titleFont = nullptr;
     HBRUSH bgBrush = nullptr, logBrush = nullptr;
     int dpi = 96, width = 826, height = 760, logTop = 423;
     bool sample = false, runningSample = false, empty = false, busy = false, scanning = false, closed = false,
-         finished = false, promptPreview = false;
+         finished = false, promptPreview = false, blockedPreview = false;
     int selected = -1;
     Catalog catalog;
     std::wstring iso, isoName = L"选择 Windows ISO 镜像", isoDirectory = L"支持 .iso 文件",
@@ -237,7 +237,7 @@ struct Ui {
         small = make(12, FW_NORMAL);
         bold = make(14, FW_SEMIBOLD);
         titleFont = make(16, FW_SEMIBOLD);
-        for (HWND h : {isoButton, refresh, combo, fat, ntfs, start, stopButton, log})
+        for (HWND h : {isoButton, refresh, combo, fat, ntfs, start, stopButton, log, exportButton})
             if (h)
                 SendMessageW(h, WM_SETFONT, (WPARAM)font, TRUE);
     }
@@ -287,7 +287,8 @@ struct Ui {
             MoveWindow(h, S(x), S(y), S(std::max(10, w)), S(t), TRUE);
         };
         mv(isoButton, right - 106, 20, 106, 44);
-        mv(combo, field, 132, right - 118 - field, 56);
+        // Height includes the list: 56px previously left almost no rows to open.
+        mv(combo, field, 132, right - 118 - field, 360);
         SendMessageW(combo, CB_SETITEMHEIGHT, -1, S(48));
         SendMessageW(combo, CB_SETITEMHEIGHT, 0, S(52));
         mv(refresh, right - 106, 132, 106, 48);
@@ -298,6 +299,7 @@ struct Ui {
         mv(log, 34, logTop + 42, width - 68, std::max(105, height - logTop - 104));
         mv(start, right - 112, height - 50, 112, 36);
         mv(stopButton, right - 235, height - 50, 112, 36);
+        mv(exportButton, right - 235, height - 50, 112, 36);
         InvalidateRect(window, nullptr, FALSE);
     }
     void State() {
@@ -305,7 +307,13 @@ struct Ui {
         for (HWND h : {isoButton, refresh, fat, ntfs})
             EnableWindow(h, can);
         EnableWindow(combo, can && SendMessageW(combo, CB_GETCOUNT, 0, 0) > 0);
-        EnableWindow(start, can && ((sample && !empty) || (Selection() && !iso.empty())));
+        bool selectionReady = Selection() != nullptr;
+#ifndef WIN11USB_READONLY
+        selectionReady = selectionReady && !iso.empty();
+#endif
+        EnableWindow(start, can && ((sample && !empty) || selectionReady));
+        EnableWindow(exportButton, !scanning);
+        ShowWindow(exportButton, busy ? SW_HIDE : SW_SHOW);
         ShowWindow(stopButton, busy ? SW_SHOW : SW_HIDE);
         SetWindowTextW(start, busy     ? L"制作中…"
                               : sample ? L"预览制作状态"
@@ -319,25 +327,62 @@ struct Ui {
         InvalidateRect(window, nullptr, FALSE);
     }
     void ApplyCatalog(Catalog c) {
+        std::wstring selectedPath;
+        if (auto old = Selection())
+            selectedPath = old->path;
         catalog = std::move(c);
         SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        int restore = -1;
         for (size_t i = 0; i < catalog.disks.size(); i++)
+#ifdef WIN11USB_READONLY
+        {
+#else
             if (catalog.disks[i].eligible()) {
-                int n = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)catalog.disks[i].friendly.c_str());
-                SendMessageW(combo, CB_SETITEMDATA, n, i);
-            }
+#endif
+            int n = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)catalog.disks[i].friendly.c_str());
+            SendMessageW(combo, CB_SETITEMDATA, n, i);
+            if (!selectedPath.empty() && Lower(catalog.disks[i].path) == Lower(selectedPath))
+                restore = n;
+        }
         if (SendMessageW(combo, CB_GETCOUNT, 0, 0) > 0) {
-            SendMessageW(combo, CB_SETCURSEL, 0, 0);
-            diskNote = L"";
+            SendMessageW(combo, CB_SETCURSEL, restore >= 0 ? restore : 0, 0);
+            auto selected = Selection();
+            diskNote = selected && !selected->eligible() ? selected->blocked : L"";
         } else
-            diskNote = L"未检测到可操作的 USB 整盘，请连接后刷新。";
+            diskNote = catalog.disks.empty() ? L"未检测到 USB 整盘，请连接后刷新；仍为空时请导出诊断。"
+                                             : L"检测到 USB，但未通过写入检查。请查看日志或导出诊断。";
         for (auto &d : catalog.disks)
             if (!d.eligible())
-                Log(L"已排除：磁盘 " + std::to_wstring(d.number) + L" · " + d.friendly + L" · " + d.blocked);
+                Log(L"制作禁用：" + d.friendly + L" · " + d.Metadata() + L" · " + d.blocked);
+        for (const auto &d : catalog.disks)
+            for (const auto &e : d.probeErrors)
+                Log(d.friendly + L"：" + e);
         for (auto &s : catalog.diagnostics)
             Log(s);
         scanning = false;
         State();
+    }
+    void ExportDiagnostics() {
+        std::vector<wchar_t> path(32768);
+        wcscpy_s(path.data(), path.size(), L"Win11Usb-DeviceReport.txt");
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof dialog;
+        dialog.hwndOwner = window;
+        dialog.lpstrTitle = L"导出设备识别诊断（仅保存报告，不操作磁盘）";
+        dialog.lpstrFilter = L"诊断报告 (*.txt)\0*.txt\0";
+        dialog.lpstrFile = path.data();
+        dialog.nMaxFile = (DWORD)path.size();
+        dialog.lpstrDefExt = L"txt";
+        dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (!GetSaveFileNameW(&dialog))
+            return;
+        std::wstring report = L"Win11Usb 0.2.0-preview.2 — 设备识别诊断\r\n";
+        report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
+                         : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
+        report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +
+                  L"\r\n\r\n窗口日志：\r\n" + sessionLog;
+        WriteUtf8(path.data(), report);
+        Log(L"诊断报告已保存：" + std::wstring(path.data()));
     }
     void Scan() {
         if (busy || scanning || sample)
@@ -375,6 +420,17 @@ struct Ui {
         d.partitions.resize(1);
         d.letters = {L"F:\\"};
         Catalog c;
+        if (blockedPreview) {
+            Disk blocked = d;
+            blocked.friendly = L"USB 设备 · 部分查询未完成（示例）";
+            blocked.attributesKnown = false;
+            blocked.layoutKnown = false;
+            blocked.probeErrors = {L"离线与只读属性：访问被拒绝（示例）"};
+            blocked.blocked = L"设备查询不完整，仅可查看，不能制作";
+            blocked.path = L"sample-blocked";
+            c.disks.push_back(blocked);
+            d.path = L"sample-ready";
+        }
         if (!empty)
             c.disks.push_back(d);
         ApplyCatalog(c);
@@ -422,6 +478,12 @@ struct Ui {
     }
     void Start() {
         if (sample) {
+            if (blockedPreview) {
+                Ask(window, L"USB 只读信息 · 示例",
+                    L"这是界面预览，不会操作磁盘。部分查询失败的 USB 也应显示在只读列表中。",
+                    DiskJson(catalog), L"确定", L"返回");
+                return;
+            }
             if (promptPreview) {
                 SendMessageW(window, WM_PREVIEW_DIALOG, 0, 0);
                 return;
@@ -430,28 +492,28 @@ struct Ui {
             return;
         }
         auto d = Selection();
-        if (!d || iso.empty())
+        if (!d)
             return;
 #ifdef WIN11USB_READONLY
         try {
-            auto now = RecheckDisk(*d, true);
-            if (!FileExists(iso))
-                throw Error(L"ISO 文件不存在。");
-            AssertOutside(iso, now, L"安装 ISO");
-            AssertOutside(ExePath(), now, L"程序");
-            Ask(window, L"只读检查完成",
-                L"原生窗口和设备识别已就绪。本版本不会挂载 ISO、清盘、格式化或复制文件。",
-                L"安装镜像\r\n" + iso + L"\r\n\r\n整支 USB 磁盘\r\n" + now.friendly + L"\r\n" +
-                    now.Metadata() +
-                    L"\r\n\r\n实现：C++ / Win32\r\n.NET：不需要\r\nPowerShell：不需要\r\nWMI / Storage "
-                    L"模块：不需要",
-                L"确定", L"返回");
-            Log(L"只读复核通过：" + now.Metadata());
+            std::wstring details = L"USB 整盘\r\n" + d->friendly + L"\r\n" + d->Metadata() +
+                                   L"\r\nUSB 识别依据：" + d->usbEvidence + L"\r\n\r\n";
+            details += d->eligible() ? L"本次设备信息查询完整。\r\n"
+                                     : L"该设备目前不能用于制作：" + d->blocked + L"\r\n";
+            for (const auto &error : d->probeErrors)
+                details += error + L"\r\n";
+            details +=
+                L"\r\n信息来自最近一次刷新。可用“导出诊断”保存报告。\r\n.NET / PowerShell / WMI：不需要。";
+            Ask(window, L"USB 设备只读信息",
+                L"本版本只读取设备信息，不会挂载 ISO、清盘、格式化或复制安装文件。", details, L"确定",
+                L"返回");
         } catch (const Error &e) {
             Log(L"检查失败：" + e.text);
             Ask(window, L"只读检查未通过", L"未修改任何磁盘。", e.text, L"确定", L"返回");
         }
 #else
+        if (iso.empty())
+            return;
         Request request{iso, Fs(), ExePath(), *d};
         if (!Ask(window, L"先检查本次制作目标",
                  L"将自动挂载并识别 ISO。清盘前还会单独显示整盘确认，默认取消。",
@@ -702,7 +764,7 @@ struct Ui {
                         : L"等待开始",
              R(right - 90, logTop + 9, right - 15, logTop + 35), RGB(207, 224, 251),
              DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        Text(dc, small, footer, R(22, height - 52, right - (busy ? 250 : 130), height - 11), Muted,
+        Text(dc, small, footer, R(22, height - 52, right - 250, height - 11), Muted,
              DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
         BitBlt(dest, 0, 0, cr.right, cr.bottom, dc, 0, 0, SRCCOPY);
         SelectObject(dc, old);
@@ -747,6 +809,7 @@ struct Ui {
             SendMessageW(fat, BM_SETCHECK, BST_CHECKED, 0);
             start = Control(L"BUTTON", L"开始制作", WS_TABSTOP | BS_OWNERDRAW, ID_START);
             stopButton = Control(L"BUTTON", L"强制结束", WS_TABSTOP | BS_OWNERDRAW, ID_STOP);
+            exportButton = Control(L"BUTTON", L"导出诊断", WS_TABSTOP | BS_OWNERDRAW, ID_EXPORT);
             log = Control(L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                           ID_LOG);
             SendMessageW(log, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
@@ -847,7 +910,12 @@ struct Ui {
                 Stop(false);
                 break;
             case ID_DISK:
+                if (auto selected = Selection())
+                    diskNote = selected->eligible() ? L"" : selected->blocked;
                 State();
+                break;
+            case ID_EXPORT:
+                ExportDiagnostics();
                 break;
             case ID_FAT:
             case ID_NTFS:
@@ -1011,7 +1079,8 @@ LRESULT CALLBACK WindowProc(HWND w, UINT m, WPARAM a, LPARAM b) {
     }
 }
 } // namespace
-int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promptPreview) {
+int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promptPreview,
+          bool blockedPreview) {
     auto setDpi = (BOOL(WINAPI *)(DPI_AWARENESS_CONTEXT))GetProcAddress(GetModuleHandleW(L"user32.dll"),
                                                                         "SetProcessDpiAwarenessContext");
     if (setDpi)
@@ -1020,6 +1089,7 @@ int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promp
     InitCommonControlsEx(&cc);
     auto u = new Ui(instance, preview, running, empty);
     u->promptPreview = promptPreview;
+    u->blockedPreview = blockedPreview;
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = WindowProc;

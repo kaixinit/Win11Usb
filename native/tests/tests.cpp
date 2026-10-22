@@ -1,5 +1,6 @@
 #include "platform.hpp"
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -267,6 +268,97 @@ void FileTests(const std::wstring &root) {
     Reject([&] { ListFiles(root + L"\\source\\", stop); }, "native file enumerate honors cancellation");
     std::cout << "PASS actual native file copy, Unicode paths, size verification, cancellation\n";
 }
+void StorageCompatibilityTests() {
+    Require(IsUsbStorage(BusTypeUsb, {}), "reported USB bus accepted");
+    Require(IsUsbStorage(BusTypeScsi, {L"SCSI\\DISK&VEN_TEST", L"USB\\VID_1234&PID_5678\\test"}),
+            "SCSI bridge needs actual USB parent");
+    Require(IsUsbStorage(BusTypeUnknown, {L"USBSTOR\\DISK&VEN_TEST"}), "USBSTOR device node accepted");
+    Require(IsUsbStorage(BusTypeNvme, {L"PCI\\OTHER", L"usb\\vid_1234&pid_5678"}),
+            "USB parent proof is case independent");
+    Require(!IsUsbStorage(BusTypeScsi, {L"SCSI\\DISK&VEN_USB", L"PCI\\VEN_1234"}),
+            "USB product text cannot authorize internal SCSI disk");
+    Require(!IsUsbStorage(BusTypeNvme, {L"PCI\\VEN_1234", L"USB\\ROOT_HUB30"}),
+            "USB root hub is not proof of USB storage ancestry");
+    Require(!IsUsbStorage(BusTypeUnknown, {}), "unknown transport remains excluded");
+    DISK_GEOMETRY_EX geometry{};
+    geometry.Geometry.BytesPerSector = 512;
+    geometry.DiskSize.QuadPart = 64 * GiB;
+    std::vector<BYTE> bytes(FIELD_OFFSET(DISK_GEOMETRY_EX, Data));
+    std::memcpy(bytes.data(), &geometry, bytes.size());
+    Disk d;
+    d.capacityKnown = false;
+    Require(bytes.size() < sizeof geometry,
+            "geometry test actually excludes optional placeholder and padding");
+    ParseDiskGeometry(d, bytes);
+    Require(d.size == 64 * GiB && d.sector == 512 && d.capacityKnown,
+            "minimum valid geometry header accepted");
+    bytes.resize(sizeof geometry + 128);
+    ParseDiskGeometry(d, bytes);
+    Require(d.size == 64 * GiB, "extended geometry accepted too");
+    bytes.resize(FIELD_OFFSET(DISK_GEOMETRY_EX, Data) - 1);
+    Reject([&] { ParseDiskGeometry(d, bytes); }, "truncated geometry rejected");
+    geometry.Geometry.BytesPerSector = 4096;
+    geometry.DiskSize.QuadPart = 128 * GiB;
+    bytes.resize(FIELD_OFFSET(DISK_GEOMETRY_EX, Data));
+    std::memcpy(bytes.data(), &geometry, bytes.size());
+    ParseDiskGeometry(d, bytes);
+    Require(d.size == 128 * GiB && d.sector == 4096, "native 4Kn geometry handled");
+    geometry.DiskSize.QuadPart = -1;
+    std::memcpy(bytes.data(), &geometry, bytes.size());
+    Reject([&] { ParseDiskGeometry(d, bytes); }, "negative geometry rejected");
+    STORAGE_DEVICE_DESCRIPTOR descriptor{};
+    descriptor.Version = sizeof descriptor;
+    descriptor.Size = FIELD_OFFSET(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties);
+    descriptor.BusType = BusTypeUsb;
+    bytes.resize(descriptor.Size);
+    std::memcpy(bytes.data(), &descriptor, bytes.size());
+    d.friendly = L"PnP fallback model";
+    ParseStorageDescriptor(d, bytes);
+    Require(d.reportedBus == BusTypeUsb && d.friendly == L"PnP fallback model",
+            "minimum descriptor preserves fallback name");
+    bytes.resize(FIELD_OFFSET(STORAGE_DEVICE_DESCRIPTOR, RawDeviceProperties) - 1);
+    Reject([&] { ParseStorageDescriptor(d, bytes); }, "short descriptor rejected");
+    Disk ready;
+    ready.number = 3;
+    ready.size = 64 * GiB;
+    ready.sector = 512;
+    ready.path = L"device";
+    ready.pnp = L"USBSTOR\\TEST";
+    Disk partial = ready;
+    partial.attributesKnown = false;
+    Require(!partial.eligible() && !SameIdentity(ready, partial),
+            "unknown disk attributes cannot pass write rechecks");
+    partial = ready;
+    partial.layoutKnown = false;
+    Require(!partial.eligible() && partial.Metadata().find(L"分区数未确认") != std::wstring::npos,
+            "failed layout is visible as unknown, not zero partitions");
+    partial = ready;
+    partial.capacityKnown = false;
+    Require(!partial.eligible() && partial.Metadata().find(L"容量未确认") != std::wstring::npos,
+            "unknown capacity does not become zero-size disk");
+    partial = ready;
+    partial.probeErrors.push_back(L"simulated device query failure");
+    Require(!partial.eligible() && !SameIdentity(ready, partial),
+            "partial results never authorize disk writes");
+    Catalog c;
+    c.interfaces = 3;
+    c.nonUsb = 1;
+    c.disks = {ready, partial};
+    auto json = DiskJson(c);
+    Require(json.find(L"serial") == std::wstring::npos && json.find(ready.pnp) == std::wstring::npos,
+            "device report excludes raw serial and PnP IDs");
+    Require(json.find(L"probe_errors") != std::wstring::npos &&
+                json.find(L"interface_count\":3") != std::wstring::npos,
+            "diagnostics retain scan stages and partial failures");
+    Fake backend;
+    std::atomic<bool> stop = false;
+    auto request = TestRequest();
+    request.disk.probeErrors = {L"access denied"};
+    auto result = RunWorkflow(request, backend, {}, stop);
+    Require(!result.copied && !backend.Has(L"prepare") && !backend.Has(L"format"),
+            "unknown device state stops before preparation or formatting");
+    std::cout << "PASS USB ancestry, variable-length storage headers, partial-query safety and diagnostics\n";
+}
 void SnapshotTests() {
     Disk a;
     a.number = 3;
@@ -462,6 +554,7 @@ int wmain(int argc, wchar_t **argv) {
         PlanTests();
         WorkflowTests();
         SnapshotTests();
+        StorageCompatibilityTests();
         XmlTests();
         FileTests(root);
         if (argc == 4 && std::wstring(argv[3]) == L"--wim-roundtrip")

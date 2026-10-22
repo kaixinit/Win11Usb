@@ -90,10 +90,16 @@ struct Disk {
     DWORD number = 0, sector = 0, style = PARTITION_STYLE_RAW;
     uint64_t size = 0;
     bool offline = false, readOnly = false, system = false, bootKnown = false;
-    std::wstring friendly, serial, pnp, path, layout, blocked, tableId;
+    bool numberKnown = true, capacityKnown = true, attributesKnown = true, layoutKnown = true;
+    DWORD reportedBus = 0;
+    std::wstring friendly, serial, pnp, path, layout, blocked, tableId, usbEvidence;
+    std::vector<std::wstring> probeErrors;
     std::vector<Partition> partitions;
     std::vector<std::wstring> letters;
-    bool eligible() const { return blocked.empty(); }
+    bool complete() const {
+        return numberKnown && capacityKnown && attributesKnown && layoutKnown && probeErrors.empty();
+    }
+    bool eligible() const { return complete() && blocked.empty(); }
     std::wstring Metadata() const;
 };
 struct Volume {
@@ -109,7 +115,11 @@ struct Catalog {
     std::vector<Disk> disks;
     std::vector<std::wstring> diagnostics;
     bool bootKnown = false;
+    DWORD interfaces = 0, nonUsb = 0, failed = 0;
 };
+bool IsUsbStorage(DWORD reportedBus, const std::vector<std::wstring> &deviceAncestors);
+void ParseDiskGeometry(Disk &disk, const std::vector<BYTE> &bytes);
+void ParseStorageDescriptor(Disk &disk, const std::vector<BYTE> &bytes);
 std::vector<Volume> ReadVolumes();
 Catalog ReadDisks();
 Disk ReadDisk(const std::wstring &path, const std::wstring &pnp = L"");
@@ -185,6 +195,7 @@ class Backend {
 };
 Result RunWorkflow(const Request &, Backend &, const Hooks &, std::atomic<bool> &);
 std::unique_ptr<Backend> CreateNativeBackend();
-int RunUi(HINSTANCE, bool sample, bool running, bool empty, bool promptPreview = false);
+int RunUi(HINSTANCE, bool sample, bool running, bool empty, bool promptPreview = false,
+          bool blockedPreview = false);
 void WriteDependencies(const std::wstring &path);
 } // namespace wu
