@@ -1,0 +1,38 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Windows 安装 U 盘" Width="520" SizeToContent="Height" MaxHeight="680"
+        MinWidth="440" WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False" Background="#F3F6FB" FontFamily="Microsoft YaHei UI" FontSize="13">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="17,9"/><Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="BorderThickness" Value="0"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border Background="{TemplateBinding Background}" CornerRadius="7" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="20">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <DockPanel Grid.Row="0" Margin="0,0,0,13">
+      <Border x:Name="IconBadge" Width="38" Height="38" CornerRadius="19" Background="#E6F0FF" DockPanel.Dock="Left" Margin="0,0,12,0">
+        <TextBlock x:Name="IconGlyph" Text="i" FontSize="23" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <StackPanel VerticalAlignment="Center">
+        <TextBlock x:Name="KindLabel" Text="提示信息" FontSize="11" FontWeight="SemiBold" Foreground="#718098"/>
+        <TextBlock x:Name="HeadingText" Text="提示标题" FontSize="18" FontWeight="Bold" Foreground="#18263D" Margin="0,2,0,0" TextWrapping="Wrap"/>
+      </StackPanel>
+    </DockPanel>
+    <TextBlock x:Name="MessageText" Grid.Row="1" TextWrapping="Wrap" LineHeight="22" Foreground="#34445D" Margin="0,0,0,12"/>
+    <Border x:Name="DetailsCard" Grid.Row="2" Background="White" BorderBrush="#DFE6F0" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,13" Visibility="Collapsed">
+      <ScrollViewer MaxHeight="190" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <TextBlock x:Name="DetailsText" TextWrapping="Wrap" LineHeight="21" Foreground="#27364D"/>
+      </ScrollViewer>
+    </Border>
+    <DockPanel Grid.Row="3" LastChildFill="False">
+      <TextBlock x:Name="HintText" Foreground="#718098" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="250" DockPanel.Dock="Left"/>
+      <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+        <Button x:Name="SecondaryButton" Content="取消" Background="#E7EDF6" Foreground="#26354D" Margin="0,0,8,0"/>
+        <Button x:Name="PrimaryButton" Content="确定" Background="#2878E8" Foreground="White"/>
+      </StackPanel>
+    </DockPanel>
+  </Grid>
+</Window>

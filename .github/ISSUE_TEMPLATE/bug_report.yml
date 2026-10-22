@@ -1,0 +1,40 @@
+name: 问题反馈
+description: 提供可复现问题与已脱敏的诊断信息
+title: '[问题] '
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Win11Usb 版本
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本、构建号与缩放比例
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 出错阶段
+      options:
+        - 启动或选择
+        - ISO 检查或挂载
+        - 整盘格式化
+        - WIM 拆分
+        - 文件复制或校验
+        - 清理或弹出
+        - 退出或界面
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤、预期和实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏的提示和日志
+      description: 不要公开用户名、个人路径、设备序列号、密码或令牌。
+      render: text

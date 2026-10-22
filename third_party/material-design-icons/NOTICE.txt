@@ -1,0 +1,9 @@
+Material Design Icons / Pictogrammers
+https://github.com/Templarian/MaterialDesign-SVG
+Pinned commit: 9e04201d4557e729822fb57f62a316c3dea1d4a8
+
+The selected SVG icon files retain their upstream Apache 2.0 terms.
+Original paths are retained in assets/ui-icons; their path data is converted
+without reshaping to WPF Geometry resources in src/Win11Usb.Gui.ps1.
+UI color and display size are applied by this application.
+See UPSTREAM-LICENSE.txt, LICENSE-APACHE-2.0.txt and SOURCES.json.

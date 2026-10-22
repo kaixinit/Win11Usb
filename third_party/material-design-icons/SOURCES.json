@@ -1,0 +1,85 @@
+{
+  "upstream": "https://github.com/Templarian/MaterialDesign-SVG",
+  "commit": "9e04201d4557e729822fb57f62a316c3dea1d4a8",
+  "date": "2026-10-21",
+  "icons": [
+    {
+      "name": "file-cog",
+      "file": "assets/ui-icons/file-cog.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/file-cog.svg",
+      "sha256": "3c38983a6c6fa8c64d94a8acc257b2e1feef36ee157fa4c92073f541dd7151c1"
+    },
+    {
+      "name": "usb-flash-drive",
+      "file": "assets/ui-icons/usb-flash-drive.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/usb-flash-drive.svg",
+      "sha256": "b32669940ba8fcdbd91a5f9b23e4b3ba2b168b38d30d1701b7b05292009b5a81"
+    },
+    {
+      "name": "cog",
+      "file": "assets/ui-icons/cog.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/cog.svg",
+      "sha256": "09ee05b5b141dabca293c8584012470b901d76febdae2b384a28a2da58fab678"
+    },
+    {
+      "name": "format-list-bulleted",
+      "file": "assets/ui-icons/format-list-bulleted.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/format-list-bulleted.svg",
+      "sha256": "a58aee8f64a9be85c28245fbf9efaf337947a35a397d91206aa946551d5db565"
+    },
+    {
+      "name": "console",
+      "file": "assets/ui-icons/console.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/console.svg",
+      "sha256": "df4c7b63210c276e95b3d444f429de4f05a5b86bbf5fe8dd37011a3f382aa6df"
+    },
+    {
+      "name": "refresh",
+      "file": "assets/ui-icons/refresh.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/refresh.svg",
+      "sha256": "6d9544dbd768dcabe41bc1e58eee213e88461024d1f72496cf0a90dcb3e250b6"
+    },
+    {
+      "name": "chevron-down",
+      "file": "assets/ui-icons/chevron-down.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/chevron-down.svg",
+      "sha256": "07debe65109ed17516b489d94e4568036ce12dee25de25308f88195c78fd0c8e"
+    },
+    {
+      "name": "alert-outline",
+      "file": "assets/ui-icons/alert-outline.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/alert-outline.svg",
+      "sha256": "fa0782b3955ba16bd1e1c212e23b0138e085bd845a26c1504cedd71ba1a72e0a"
+    },
+    {
+      "name": "information-outline",
+      "file": "assets/ui-icons/information-outline.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/information-outline.svg",
+      "sha256": "95566a019ea1ec39e3095462fca13aae958ca0da682eeeb6a86d230a5fde040a"
+    },
+    {
+      "name": "play",
+      "file": "assets/ui-icons/play.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/play.svg",
+      "sha256": "0688f0a9315f57f31445e3bc4d55604e0bd5243a85de3944a668079a3e58f8ee"
+    },
+    {
+      "name": "check-circle",
+      "file": "assets/ui-icons/check-circle.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/check-circle.svg",
+      "sha256": "cba60d5cff35a64b6de7c04a011294728143e0061b55703835c0b0b138d1afb0"
+    },
+    {
+      "name": "radiobox-marked",
+      "file": "assets/ui-icons/radiobox-marked.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/radiobox-marked.svg",
+      "sha256": "2845eb767a5d6851a3eace2977d7192040c0b209c89db1a9fa11dab49153e77e"
+    },
+    {
+      "name": "circle",
+      "file": "assets/ui-icons/circle.svg",
+      "url": "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/9e04201d4557e729822fb57f62a316c3dea1d4a8/svg/circle.svg",
+      "sha256": "d4f3049827c93ab15b74217bc9bc73f93d77ca8d85de6839a444e353ac8f4c87"
+    }
+  ]
+}

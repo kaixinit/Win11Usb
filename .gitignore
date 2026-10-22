@@ -1,0 +1,9 @@
+/work/
+/outputs/
+/dist/
+/release/
+/tests/artifacts/
+*.log
+*.user
+Thumbs.db
+.DS_Store

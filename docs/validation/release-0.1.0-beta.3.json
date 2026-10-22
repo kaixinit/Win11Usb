@@ -1,0 +1,39 @@
+{
+  "version": "0.1.0-beta.3",
+  "prepared_date": "2026-10-22",
+  "exe_sha256": "35BB091183070F495429611641C596289F692E055DCAE9D83B293B66AE7AADEB",
+  "digital_signature": "NotSigned",
+  "local_scan": {
+    "utc_time": "2026-10-22T05:44:29.9790154Z",
+    "result": "found no threats",
+    "exit_code": 0,
+    "engine": "1.1.26090.9",
+    "signatures": "1.461.144.0",
+    "signature_updated": "2026-10-22T05:44:24.0000000+08:00",
+    "real_time_protection": true
+  },
+  "local_regression": {
+    "passed": 11,
+    "total": 11,
+    "native_workflow_scenarios": 17,
+    "storage_boundaries": "mocked",
+    "physical_disk_operations_performed_by_agent": false
+  },
+  "user_feedback": {
+    "date": "2026-10-22",
+    "affected_computer_startup": "opened normally without antivirus alert",
+    "full_creation": "completed without antivirus alert",
+    "evidence": "redacted log and supplied screenshot",
+    "file_system": "FAT32",
+    "device": "Lenovo Lenovo K110",
+    "device_size_gb_displayed": 14.6,
+    "wim_bytes": 8036271417,
+    "swm_files": 2,
+    "usb_eject": "succeeded",
+    "iso_eject": "succeeded",
+    "remote_exe_hash_independently_verified": false,
+    "uefi_boot_verified": false
+  },
+  "distribution": "local prerelease materials; not uploaded to GitHub",
+  "universal_antivirus_safety_claim": false
+}
