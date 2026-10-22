@@ -146,4 +146,16 @@ ImageIdentity ReadWimIdentity(const std::wstring &image, const std::wstring &iso
     LocalFree(buffer);
     return ParseWimXml(xml, iso);
 }
+ImageIdentity ReadTaskWimIdentity(const std::wstring &image, const std::wstring &iso,
+                                  const std::wstring &work, const Disk &target, const Hooks &hooks) {
+    if (work.empty())
+        throw Error(L"未指定本次任务目录。尚未清盘。");
+    // FinalPath/AssertOutside requires an existing path. Validate the existing task
+    // directory first, create its fixed child, then check that child's actual volume.
+    AssertOutside(work, target, L"本次临时目录");
+    auto scratch = FullPath(work) + L"\\wim-temp";
+    MakeDirectory(scratch);
+    AssertOutside(scratch, target, L"WIM 临时目录");
+    return ReadWimIdentity(image, iso, scratch, hooks);
+}
 } // namespace wu

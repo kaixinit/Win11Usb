@@ -249,9 +249,7 @@ class NativeBackend final : public Backend {
         for (auto path : {L"setup.exe", L"sources\\boot.wim", L"efi\\boot\\bootx64.efi"})
             if (!FileExists(p.source + path))
                 throw Error(std::wstring(L"ISO 缺少 x64 安装启动文件：") + path + L"，尚未清盘。");
-        auto wimScratch = p.work + L"\\wim-temp";
-        AssertOutside(wimScratch, r.disk, L"WIM 临时目录");
-        p.image = ReadWimIdentity(p.plan.images[0].full, r.iso, wimScratch, h);
+        p.image = ReadTaskWimIdentity(p.plan.images[0].full, r.iso, p.work, r.disk, h);
         if (p.image.arch != 9)
             throw Error(L"当前原生验证版仅支持 x64 安装映像。尚未清盘。");
         if (p.image.label.empty() || p.image.label.size() > 11 ||

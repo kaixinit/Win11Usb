@@ -1,0 +1,44 @@
+[
+  {
+    "file": "Win11Usb-NativeReadOnly-v0.2.0-preview.4.exe",
+    "size": 1795072,
+    "sha256": "9B46C671B66529AF8C9E127FAB280C00E142A5A5A9EE6B6FBAA23AD639CFD225",
+    "clr_header": [
+      "CLRRuntimeHeaderRVA: 0x0",
+      "CLRRuntimeHeaderSize: 0x0"
+    ],
+    "imports": [
+      "COMCTL32.dll",
+      "comdlg32.dll",
+      "GDI32.dll",
+      "USER32.dll",
+      "SHELL32.dll",
+      "ole32.dll",
+      "ADVAPI32.dll",
+      "SETUPAPI.dll",
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ]
+  },
+  {
+    "file": "Win11Usb-NativeReview-v0.2.0-preview.4.exe",
+    "size": 2787328,
+    "sha256": "271F7540E44E95EE4B7D9A46CC0C7835E75138960F42A7D54BE5A5D4791DF88B",
+    "clr_header": [
+      "CLRRuntimeHeaderRVA: 0x0",
+      "CLRRuntimeHeaderSize: 0x0"
+    ],
+    "imports": [
+      "COMCTL32.dll",
+      "comdlg32.dll",
+      "GDI32.dll",
+      "USER32.dll",
+      "SHELL32.dll",
+      "ole32.dll",
+      "ADVAPI32.dll",
+      "SETUPAPI.dll",
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ]
+  }
+]

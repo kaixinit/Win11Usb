@@ -26,6 +26,8 @@ void MakeDirectory(const std::wstring &path);
 std::vector<File> ListFiles(const std::wstring &root, std::atomic<bool> &stop);
 ImageIdentity ReadWimIdentity(const std::wstring &image, const std::wstring &iso, const std::wstring &scratch,
                               const Hooks &hooks = {});
+ImageIdentity ReadTaskWimIdentity(const std::wstring &image, const std::wstring &iso,
+                                  const std::wstring &work, const Disk &target, const Hooks &hooks = {});
 ImageIdentity ParseWimXml(const std::wstring &xml, const std::wstring &iso);
 void CopyFilesNative(const std::vector<File> &files, const std::wstring &target, const Hooks &hooks,
                      std::atomic<bool> &stop);

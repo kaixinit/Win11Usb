@@ -472,6 +472,45 @@ void WimReadTests(const std::wstring &root, const std::wstring &fixture) {
     std::cout
         << "PASS real read-only WIMGAPI fixture, Unicode task scratch, invalid scratch and missing TEMP\n";
 }
+void WimTaskTests(const std::wstring &root, const std::wstring &fixture) {
+    auto work = root + L"\\fresh task 中文";
+    auto scratch = work + L"\\wim-temp";
+    MakeDirectory(work);
+    Require(GetFileAttributesW(scratch.c_str()) == INVALID_FILE_ATTRIBUTES,
+            "task integration begins without a WIM scratch directory");
+    Disk otherDisk;
+    otherDisk.number = MAXDWORD; // No physical writes; only actual path-to-volume queries.
+    auto d = ReadTaskWimIdentity(fixture, L"windows_11_26h2.iso", work, otherDisk);
+    Require(d.label == L"WIN11_26H2" && d.version == L"10.0.26300.9457",
+            "production task preflight creates and verifies scratch before real WIM read");
+    DWORD attributes = GetFileAttributesW(scratch.c_str());
+    Require(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY),
+            "task WIM scratch was created on first run");
+    auto disks = PathDisks(work);
+    Require(!disks.empty() && PathDisks(scratch) == disks,
+            "created scratch actual physical volume matches task volume");
+    auto blockedWork = root + L"\\task-on-target";
+    MakeDirectory(blockedWork);
+    Disk sameDisk;
+    sameDisk.number = disks[0];
+    Reject([&] { ReadTaskWimIdentity(fixture, L"windows_11_26h2.iso", blockedWork, sameDisk); },
+           "task preflight refuses target-disk scratch before creating it");
+    Require(GetFileAttributesW((blockedWork + L"\\wim-temp").c_str()) == INVALID_FILE_ATTRIBUTES,
+            "target-disk rejection has no scratch creation side effect");
+    Reject([&] { ReadTaskWimIdentity(fixture, L"windows_11_26h2.iso", L"", otherDisk); },
+           "task preflight rejects an unspecified work directory");
+    Reject([&] { ReadTaskWimIdentity(fixture, L"windows_11_26h2.iso", root + L"\\missing-task", otherDisk); },
+           "task preflight requires an existing validated parent");
+    auto blockedChild = root + L"\\task-child-is-file";
+    MakeDirectory(blockedChild);
+    WriteUtf8(blockedChild + L"\\wim-temp", L"not a directory");
+    Reject([&] { ReadTaskWimIdentity(fixture, L"windows_11_26h2.iso", blockedChild, otherDisk); },
+           "task preflight rejects a non-directory scratch child");
+    d = ReadTaskWimIdentity(fixture, L"windows_11_26h2.iso", work, otherDisk);
+    Require(d.label == L"WIN11_26H2", "task preflight can reuse its own existing scratch directory");
+    std::cout << "PASS production task WIM preflight from absent scratch through actual volume checks and "
+                 "WIMGAPI\n";
+}
 void WimApiTest(const std::wstring &root) {
     HANDLE rawToken;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &rawToken))
@@ -606,6 +645,7 @@ int wmain(int argc, wchar_t **argv) {
         XmlTests();
         FileTests(root);
         WimReadTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
+        WimTaskTests(root, Parent(FullPath(argv[1])) + L"\\fixtures\\metadata.wim");
         if (argc == 4 && std::wstring(argv[3]) == L"--wim-roundtrip")
             WimApiTest(root);
         else
