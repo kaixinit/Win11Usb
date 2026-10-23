@@ -114,7 +114,7 @@ RECT ChildBounds(HWND owner, HWND child) {
     MapWindowPoints(nullptr, owner, reinterpret_cast<POINT *>(&bounds), 2);
     return bounds;
 }
-void CheckMainLayout(Ui &ui) {
+void CheckMainLayout(Ui &ui, const char *scenario) {
     RECT client{};
     GetClientRect(ui.window, &client);
     for (HWND control : {ui.isoButton, ui.refresh, ui.combo, ui.fat, ui.ntfs, ui.log,
@@ -122,9 +122,25 @@ void CheckMainLayout(Ui &ui) {
         if (!IsWindowVisible(control))
             continue;
         auto bounds = ChildBounds(ui.window, control);
-        Require(bounds.left >= 0 && bounds.top >= 0 && bounds.right <= client.right &&
+        bool fits = bounds.left >= 0 && bounds.top >= 0 && bounds.right <= client.right &&
                     bounds.bottom <= client.bottom && bounds.right > bounds.left &&
-                    bounds.bottom > bounds.top,
+                    bounds.bottom > bounds.top;
+        if (!fits) {
+            RECT outer{};
+            GetWindowRect(ui.window, &outer);
+            MONITORINFO monitor{sizeof monitor};
+            GetMonitorInfoW(MonitorFromWindow(ui.window, MONITOR_DEFAULTTONEAREST), &monitor);
+            std::cerr << "layout diagnostic: scenario=" << scenario << " layout_dpi=" << ui.dpi
+                      << " window_dpi=" << GetDpiForWindow(ui.window)
+                      << " client=[" << client.left << ',' << client.top << ',' << client.right
+                      << ',' << client.bottom << "] window=[" << outer.left << ',' << outer.top
+                      << ',' << outer.right << ',' << outer.bottom << "] work_area=["
+                      << monitor.rcWork.left << ',' << monitor.rcWork.top << ','
+                      << monitor.rcWork.right << ',' << monitor.rcWork.bottom << "] control_id="
+                      << GetDlgCtrlID(control) << " bounds=[" << bounds.left << ',' << bounds.top
+                      << ',' << bounds.right << ',' << bounds.bottom << "]\n";
+        }
+        Require(fits,
                 "long-path layout keeps every visible product control inside its client area");
     }
     auto log = ChildBounds(ui.window, ui.log);
@@ -217,16 +233,19 @@ void CheckLongPathLayouts(Ui &ui) {
     SetWindowPos(ui.window, nullptr, 0, 0, 720, 700,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     Pump(100);
-    CheckMainLayout(ui);
+    CheckMainLayout(ui, "96dpi-720x700");
     MONITORINFO monitor{sizeof monitor};
     GetMonitorInfoW(MonitorFromWindow(ui.window, MONITOR_DEFAULTTONEAREST), &monitor);
+    // This is a fixed-size geometry test at simulated 144 DPI. The monitor's
+    // real DPI has not changed, so clipping the synthetic window to a small
+    // service desktop mixes unrelated work-area constraints into this test.
+    // A test window may extend off-screen; this does not claim small-screen fit.
     RECT suggested{monitor.rcWork.left, monitor.rcWork.top,
-                   monitor.rcWork.left + std::min(1080, (int)(monitor.rcWork.right - monitor.rcWork.left)),
-                   monitor.rcWork.top + std::min(1050, (int)(monitor.rcWork.bottom - monitor.rcWork.top))};
+                   monitor.rcWork.left + 1080, monitor.rcWork.top + 1050};
     SendMessageW(ui.window, WM_DPICHANGED, MAKELONG(144, 144), (LPARAM)&suggested);
     Pump(100);
     Require(ui.dpi == 144, "exercise production layout and fonts at simulated 144 dpi");
-    CheckMainLayout(ui);
+    CheckMainLayout(ui, "simulated-144dpi-1080x1050");
     *ui.Selection() = std::move(originalDisk);
     ui.iso = std::move(originalIso);
     ui.isoName = std::move(originalName);
