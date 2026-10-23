@@ -47,3 +47,9 @@ Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --eject-report eject-report.txt
 本次已完成的 U 盘无需为消除弹出警告重新制作，可以使用 Windows“安全删除硬件”。新版自动弹出在后续正常制作时验收；若仍失败，先导出只读诊断再核对，不需要为取得报告重新格式化。
 
 参考：[Microsoft 系统保留的设备安装类](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/system-defined-device-setup-classes-reserved-for-system-use)、[可用设备安装类](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/system-defined-device-setup-classes-available-to-vendors)、[CM_Request_Device_EjectW](https://learn.microsoft.com/en-us/windows/win32/api/cfgmgr32/nf-cfgmgr32-cm_request_device_ejectw)。
+
+## 后续实机复测通过（2026-10-23）
+
+用户收到 preview.14 后提供的下一份完整日志已记录六阶段成功：全容量 FAT32、2 个 SWM、1,067 个文件复制及逐内容校验、SWM 清理、USB 安全弹出、ISO 弹出和制作完成。没有失败或警告，复制/校验路径唯一且完全对应。末次设备扫描减少到 3 个磁盘接口、1 个 USB，和目标设备移除一致。
+
+源码确认，只有 `CM_Request_Device_EjectW` 返回 `CR_SUCCESS` 才记录 USB 弹出成功。因此这次是系统接受了实际移除请求，并非仅改变提示文字。应用版本和 EXE 哈希未内载于该日志，不能独立认证其二进制版本；结论限于用户此次 Kingston / FAT32 配置。实际 UEFI 引导、NTFS、其他介质及 Defender 动态检测继续独立验收。去身份核对结果见 [user-hardware-success.json](test-results/preview14/user-hardware-success.json)。

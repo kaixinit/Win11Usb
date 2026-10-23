@@ -1,0 +1,34 @@
+{
+  "received_date": "2026-10-23",
+  "context": "User supplied after receiving preview.14; app version and EXE hash absent from log",
+  "source_sha256": "ce09e299137cf60d2616be760f85f3d38a49860a48ba614a2f5a843205ac6889",
+  "reported_device": "Kingston DataTraveler 3.0",
+  "capacity_bytes": 62008590336,
+  "filesystem": "FAT32",
+  "cluster_bytes": 32768,
+  "complete_stages": 6,
+  "swm_files": 2,
+  "copied_paths": 1067,
+  "content_verified_paths": 1067,
+  "duplicate_paths": 0,
+  "copy_and_verify_order_identical": true,
+  "critical_x64_uefi_file_ready": true,
+  "temporary_swm_cleaned": true,
+  "usb_safe_eject_reported_success": true,
+  "iso_ejected": true,
+  "workflow_completion_reported": true,
+  "failure_warning_markers": 0,
+  "last_scan": {
+    "disk_interfaces": 3,
+    "usb_disks": 1,
+    "non_usb_disks": 2,
+    "incomplete_queries": 0
+  },
+  "source_message_semantics": "USB success logged only after CM_Request_Device_EjectW returns CR_SUCCESS",
+  "not_demonstrated": [
+    "actual UEFI boot",
+    "NTFS hardware workflow",
+    "other USB hardware",
+    "Defender dynamic result"
+  ]
+}
