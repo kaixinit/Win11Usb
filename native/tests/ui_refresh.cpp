@@ -24,6 +24,7 @@ struct Paints {
     unsigned parent = 0, log = 0, iso = 0, disk = 0, outside = 0;
     Ui *ui = nullptr;
     bool warningSeen = false, completionSeen = false, modalOwnerDisabled = false;
+    bool syntheticDpiBounds = false;
     bool modalFocusPrimary = false, modalFocusSecondary = false;
     bool modalFits = false;
     unsigned modalCount = 0;
@@ -33,6 +34,15 @@ struct Paints {
 };
 LRESULT CALLBACK CountPaint(HWND window, UINT message, WPARAM a, LPARAM b, UINT_PTR id, DWORD_PTR data) {
     auto &p = *(Paints *)data;
+    if (id == 1 && message == WM_GETMINMAXINFO && p.syntheticDpiBounds) {
+        auto result = DefSubclassProc(window, message, a, b);
+        auto limits = reinterpret_cast<MINMAXINFO *>(b);
+        // Only this synthetic geometry fixture may exceed the real desktop's
+        // maximum tracking size. Keep the production minimum-size policy.
+        limits->ptMaxTrackSize.x = std::max<LONG>(limits->ptMaxTrackSize.x, 1080);
+        limits->ptMaxTrackSize.y = std::max<LONG>(limits->ptMaxTrackSize.y, 1050);
+        return result;
+    }
     if (id == 1 && message == WM_TIMER && a == 93) {
         HWND popup = GetLastActivePopup(window);
         DWORD process = 0;
@@ -212,7 +222,7 @@ void CheckMainKeyboard(Ui &ui) {
         Require((GetWindowLongPtrW(button, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW,
                 "Tab navigation preserves the product button rendering style");
 }
-void CheckLongPathLayouts(Ui &ui) {
+void CheckLongPathLayouts(Ui &ui, Paints &paints) {
     auto originalDisk = *ui.Selection();
     auto originalIso = ui.iso, originalName = ui.isoName, originalDirectory = ui.isoDirectory;
     std::wstring longName = L"zh-cn_windows_11_business_editions_version_26h2_x64";
@@ -242,9 +252,14 @@ void CheckLongPathLayouts(Ui &ui) {
     // A test window may extend off-screen; this does not claim small-screen fit.
     RECT suggested{monitor.rcWork.left, monitor.rcWork.top,
                    monitor.rcWork.left + 1080, monitor.rcWork.top + 1050};
+    paints.syntheticDpiBounds = true;
     SendMessageW(ui.window, WM_DPICHANGED, MAKELONG(144, 144), (LPARAM)&suggested);
     Pump(100);
     Require(ui.dpi == 144, "exercise production layout and fonts at simulated 144 dpi");
+    RECT actual{};
+    Require(GetWindowRect(ui.window, &actual), "read synthetic DPI test window bounds");
+    Require(actual.right - actual.left == 1080 && actual.bottom - actual.top == 1050,
+            "synthetic 144 DPI geometry uses the full requested 1080x1050 window");
     CheckMainLayout(ui, "simulated-144dpi-1080x1050");
     *ui.Selection() = std::move(originalDisk);
     ui.iso = std::move(originalIso);
@@ -254,6 +269,7 @@ void CheckLongPathLayouts(Ui &ui) {
                  monitor.rcWork.top + 800};
     SendMessageW(ui.window, WM_DPICHANGED, MAKELONG(96, 96), (LPARAM)&suggested);
     ui.State();
+    paints.syntheticDpiBounds = false;
 }
 } // namespace
 int wmain(int argc, wchar_t **argv) {
@@ -381,7 +397,7 @@ int wmain(int argc, wchar_t **argv) {
         KillTimer(window, 93);
         paints.modalAction = Paints::ModalAction::Close;
         CheckMainKeyboard(ui);
-        CheckLongPathLayouts(ui);
+        CheckLongPathLayouts(ui, paints);
         auto report = L"{\"simulated_log_events\":5000,\"simulated_progress_events\":10000,"
                       L"\"copy_parent_paints\":" +
                       std::to_wstring(copyParent) + L",\"copy_log_paints\":" + std::to_wstring(copyLog) +
