@@ -1,13 +1,14 @@
 name: Windows build and regression
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, native-win32]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   build:
+    name: Historical beta.3 C# / PowerShell
     runs-on: windows-2022
     timeout-minutes: 15
     defaults:
@@ -21,15 +22,81 @@ jobs:
         run: .\build\Build-Win11Usb.ps1
       - name: Run non-destructive regression suites
         run: .\tests\Run-Tests.ps1
-      - name: Package candidate
-        run: .\build\Package-Release.ps1
-      - name: Upload candidate and test record
+      - name: Upload historical beta.3 regression build and test record
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: Win11Usb-candidate
+          name: Win11Usb-beta3-regression
           path: |
-            release/*.zip
-            release/SHA256SUMS.txt
+            dist/Win11Usb.exe
             tests/artifacts/test-results.json
           if-no-files-found: error
+          retention-days: 14
+  native:
+    name: Native C++ / Win32 candidate
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare pinned native toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force work/ci-native | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP 'llvm-mingw-20261020-msvcrt-x86_64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/llvm-mingw-20261020-msvcrt-x86_64.zip' -OutFile $archive
+          $expected = '52a3e3f584a74c3cde8ceb0c6960549683178e03b36818cb02b7ed109a68ff67'
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Toolchain SHA-256 mismatch: $actual" }
+          $toolchainRoot = Join-Path $env:RUNNER_TEMP 'win11usb-native-toolchain'
+          Expand-Archive -LiteralPath $archive -DestinationPath $toolchainRoot
+          $bin = Join-Path $toolchainRoot 'llvm-mingw-20261020-msvcrt-x86_64/bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $bin 'x86_64-w64-mingw32-clang++.exe'))) {
+            throw 'Expected native compiler was not extracted'
+          }
+          "LLVM_MINGW_BIN=$bin" >> $env:GITHUB_ENV
+          "llvm-mingw 20261020 / msvcrt x86_64 / SHA-256 $actual" | Set-Content work/ci-native/toolchain.txt
+      - name: Build read-only and full native EXEs
+        run: |
+          & .\native\build.cmd $env:LLVM_MINGW_BIN 2>&1 | Tee-Object work/ci-native/build-readonly.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native read-only build failed' }
+          & .\native\build.cmd $env:LLVM_MINGW_BIN full 2>&1 | Tee-Object work/ci-native/build-full.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native full build failed' }
+      - name: Run non-destructive native regression suites
+        run: |
+          & .\native\test.cmd $env:LLVM_MINGW_BIN 2>&1 | Tee-Object work/ci-native/workflow-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native workflow regression failed' }
+      - name: Run production UI refresh and dialog regression
+        run: |
+          & .\native\test-ui.cmd $env:LLVM_MINGW_BIN 2>&1 | Tee-Object work/ci-native/ui-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native UI regression failed' }
+      - name: Verify native PE and runtime dependencies
+        run: |
+          python native/verify-pe.py dist/Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe dist/Win11Usb-NativeReview-v0.2.0-preview.14.exe | Tee-Object work/ci-native/pe-verification.json
+          if ($LASTEXITCODE -ne 0) { throw 'Native PE verification failed' }
+      - name: Upload native candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Win11Usb-native-candidate
+          path: |
+            dist/Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe
+            dist/Win11Usb-NativeReview-v0.2.0-preview.14.exe
+            work/ci-native/pe-verification.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload native test records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: Win11Usb-native-test-records
+          path: |
+            work/ci-native/
+            work/native-tests-*/result.txt
+            work/native-formatter-tests-*/invalid-seek.txt
+            work/native-formatter-tests-*/lock-timeout.txt
+            work/native-ui-tests-*/ui-refresh.json
+          if-no-files-found: warn
           retention-days: 14

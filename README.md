@@ -1,137 +1,121 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/kaixinit/Win11Usb/main/assets/usb-eject-source.png" width="80" alt="Win11Usb 应用图标">
+  <img src="assets/usb-eject-source.png" width="80" alt="Win11Usb U 盘图标">
   <h1>Win11Usb</h1>
-  <p><strong>Windows 安装 U 盘制作工具</strong></p>
-  <p>选好 ISO 和 U 盘，在一个窗口完成制作。<br>全容量 FAT32 · 大 WIM 自动拆分 · 本地离线制作 · 实时进度</p>
+  <p><strong>把 Windows ISO，做成一支安装 U 盘。</strong></p>
+  <p>C++ / Win32 原生 · 无 .NET · 无 PowerShell · 单文件免安装<br>全容量 FAT32 · 大 WIM 自动拆分 · 本地离线制作</p>
   <p>
-    <a href="https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3"><img src="https://img.shields.io/badge/Pre--release-v0.1.0--beta.3-2563eb?style=flat-square" alt="v0.1.0-beta.3 预发布"></a>
+    <a href="https://github.com/kaixinit/Win11Usb/releases/tag/v0.2.0-preview.14"><img src="https://img.shields.io/badge/Native_Pre--release-v0.2.0--preview.14-2563eb?style=flat-square" alt="原生预发布 v0.2.0-preview.14"></a>
     <img src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078d4?style=flat-square" alt="面向 Windows 10 / 11 x64">
-    <a href="https://github.com/kaixinit/Win11Usb/actions/workflows/windows.yml"><img src="https://github.com/kaixinit/Win11Usb/actions/workflows/windows.yml/badge.svg?branch=main" alt="Windows 构建与回归测试"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-16a34a?style=flat-square" alt="项目原创代码采用 MIT 许可证"></a>
   </p>
   <p>
-    <a href="https://github.com/kaixinit/Win11Usb/releases/download/v0.1.0-beta.3/Win11Usb-v0.1.0-beta.3-windows-x64.zip"><strong>下载 Windows x64 · beta.3</strong></a>
-    &nbsp;·&nbsp; <a href="https://github.com/kaixinit/Win11Usb/releases">全部版本</a>
+    <a href="https://github.com/kaixinit/Win11Usb/releases/download/v0.2.0-preview.14/Win11Usb-v0.2.0-preview.14-windows-x64.exe"><strong>↓ 下载原生版 EXE · Windows x64</strong></a>
+    &nbsp;·&nbsp; <a href="https://github.com/kaixinit/Win11Usb/releases/tag/v0.2.0-preview.14">版本说明</a>
     &nbsp;·&nbsp; <a href="README.en.md">English</a>
   </p>
 </div>
 
-> **制作会清空所选 U 盘的全部分区和文件。** 请先备份，并在最终确认框核对磁盘编号、名称与容量。当前为预发布版本。
+> **制作会清空所选 U 盘的全部分区和文件。** 请先备份，并在最终确认框核对磁盘编号、名称与容量。原生版目前为预发布，beta.3 仍独立保留。
 
-## 制作过程，看得见
+## 一个窗口，完成制作
 
-从选择镜像，到复制、校验与清理，都在同一个窗口。六阶段导航、复制整体进度、当前文件进度和滚动日志同时显示。
+选好 ISO 和 U 盘，跟随六阶段进度完成制作。整体进度、当前文件和滚动日志同时显示；复制期间合并刷新，减少界面闪烁。
 
-![Win11Usb 制作界面：六阶段导航、整体与当前文件进度、实时日志](docs/screenshots/running.jpg)
+![原生版制作界面预览：六阶段导航、整体与当前文件进度、制作日志](docs/screenshots/native/running.png)
 
-*截图来自实际程序的预览模式，使用示例设备和模拟进度，不作为实机制作或启动成功的证明。*
+*截图为实际原生程序界面的只读预览，使用示例设备和模拟进度，不是实机写盘或启动成功的证明。*
 
 <details>
-<summary>更多界面：选择镜像与最终格式化确认</summary>
+<summary>查看主界面与格式化确认弹窗</summary>
 
-**选择本地 ISO 和要写入的整支 U 盘**
+**选择 Windows ISO、整支 U 盘和文件系统**
 
-![选择 ISO、写入 U 盘和文件系统，示例数据](docs/screenshots/ready.jpg)
+![原生版主界面只读预览，示例数据](docs/screenshots/native/ready.png)
 
 **清盘前单独确认，默认取消**
 
-![NTFS 最终确认：磁盘身份、清盘范围和启动兼容性提醒，示例数据](docs/screenshots/format-ntfs.jpg)
+![全容量 FAT32 最终格式化确认，只读预览与示例数据](docs/screenshots/native/format-fat32.png)
 
 </details>
 
-## 为什么选择 Win11Usb
+## 产品特色
 
 | 特色 | 能帮你做什么 |
 | --- | --- |
-| **大容量 U 盘，也能重建为全容量 FAT32** | 支持将原 NTFS 格式或多分区 PE 盘清空后，重建为一个占用可用容量的 FAT32 分区。需要时调用随包提供的兼容格式化工具，不把大盘缩到约 31 GB。 |
-| **大 WIM，按需自动拆分** | install.wim 超过 4,294,967,295 字节时，先在本机拆成 SWM 再复制。选择 NTFS 也沿用相同规则。 |
-| **打开即用，本地制作** | 单文件 EXE，无需额外安装运行库。选择已有的 Windows ISO，程序自动挂载并识别映像；制作无需联网。 |
-| **过程清晰，结果可查** | 六阶段导航、整体与当前文件双进度、实时日志；复制后检查文件大小，结束时可清理临时文件、安全弹出 U 盘与 ISO。 |
+| **原生运行，无 .NET、无 PowerShell** | C++ / Win32 界面与制作后端，不加载 CLR、WPF 或 PowerShell；无需另装 .NET、VC++ 运行库或 WebView。 |
+| **一个 EXE，免安装、离线制作** | 下载即可运行。手动选择本地 Windows ISO，由程序自动只读挂载并识别映像；制作无需联网。 |
+| **大容量 U 盘，全容量 FAT32** | 将原 NTFS 或多分区 U 盘清空后，重建一个全容量 FAT32 分区，避免只使用约 32 GB。已收到 57.8 GiB Kingston 的完整实机通过日志。 |
+| **大 WIM 自动拆分** | `install.wim` 超过 4,294,967,295 字节时，先在本机拆为 SWM 再复制。FAT32、NTFS 都沿用相同规则。 |
+| **复制后，逐块比较内容** | 刷新缓存，检查文件大小并逐块比较源文件与 U 盘文件内容，复核关键 x64 UEFI 文件；校验过程显示进度。 |
+| **收尾有结果** | 制作后可选择清理本次临时 SWM、安全弹出 U 盘与 ISO。弹出失败会准确提示，保留已完成的制作结果。 |
 
-全容量 FAT32 按当前流程支持不超过 2 TiB 的 USB 磁盘；大于 32 GB 的兼容格式化分支仍待补充当前版本的实机测试。**这是清空后重建，不是保留文件的无损转换。**
+全容量 FAT32 流程支持 **8 GiB–2 TiB** USB 磁盘，容量包含正常分区对齐与文件系统开销。**这是清空后重建，不是保留文件的无损转换。**
 
-制作前会排除系统盘、启动盘、离线和只读磁盘，并复核目标身份、分区布局及源文件位置。ISO、程序或临时文件位于目标盘时会停止。这些检查不能替代备份和人工核对。
+## 下载与版本选择
 
-## 下载
-
-普通用户选择 **Windows x64 运行包**，解压后打开 Win11Usb.exe 即可。
-
-| 文件 | 用途 |
+| 下载 | 用途 |
 | --- | --- |
-| **[下载 Windows x64 运行包](https://github.com/kaixinit/Win11Usb/releases/download/v0.1.0-beta.3/Win11Usb-v0.1.0-beta.3-windows-x64.zip)** | 单文件 EXE、使用说明、第三方许可与对应源码，无需安装。 |
-| [下载项目源码](https://github.com/kaixinit/Win11Usb/releases/download/v0.1.0-beta.3/Win11Usb-v0.1.0-beta.3-source.zip) | 项目源码、构建脚本、测试与 GitHub 配置。 |
-| [SHA-256 校验清单](https://github.com/kaixinit/Win11Usb/releases/download/v0.1.0-beta.3/SHA256SUMS.txt) | 核对两个 ZIP；运行包内另有 EXE 清单。 |
+| **[原生版单文件 EXE](https://github.com/kaixinit/Win11Usb/releases/download/v0.2.0-preview.14/Win11Usb-v0.2.0-preview.14-windows-x64.exe)** | `v0.2.0-preview.14`，Windows x64，直接运行，无需安装。 |
+| [原生版配套资料 ZIP](https://github.com/kaixinit/Win11Usb/releases/download/v0.2.0-preview.14/Win11Usb-v0.2.0-preview.14-windows-x64.zip) | 同一 EXE、说明和第三方源码/许可，便于完整保存与转发。 |
+| [项目源码 ZIP](https://github.com/kaixinit/Win11Usb/releases/download/v0.2.0-preview.14/Win11Usb-v0.2.0-preview.14-source.zip) · [SHA-256 校验清单](https://github.com/kaixinit/Win11Usb/releases/download/v0.2.0-preview.14/SHA256SUMS.txt) | 构建、审查或核对发布文件。 |
+| [保留的 beta.3](https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3) | 原有 C# / WPF / PowerShell 版本，文件和发布记录保持独立。 |
 
-[查看 beta.3 发布说明](https://github.com/kaixinit/Win11Usb/releases/tag/v0.1.0-beta.3) · [使用与常见问题](docs/FAQ.md)
+**新版不会自动覆盖旧版。** 两版使用不同版本号、发布标签与 EXE 文件名，可放在不同文件夹中保留；程序没有自动更新机制。不要同时对同一支 U 盘执行制作。
 
 ## 开始制作
 
-准备一个本地 Windows 10 / 11 x64 安装 ISO，以及一支**已备份、容量足够且至少 8 GiB** 的 USB 磁盘。
+准备本地 Windows 10 / 11 x64 安装 ISO，以及一支已备份、容量足够且至少 8 GiB 的 USB 磁盘。
 
-1. 从发布包取出 Win11Usb.exe，运行并确认 Windows 管理员权限提示。
-2. 选择本地 Windows ISO，选择“写入U盘”中的目标整盘。
-3. 选择 FAT32 或 NTFS。通常优先选择 FAT32；部分 UEFI 固件可能不支持直接从 NTFS 启动。
-4. 点击“开始制作”，核对检查信息，再单独确认整盘格式化。默认取消。
-5. 程序识别映像、重建分区、按需拆分、复制并检查文件大小。结束后可清理临时 SWM，选择是否安全弹出 U 盘与 ISO。
+1. 运行原生版 EXE，确认 Windows 管理员权限提示。
+2. 选择 ISO，在“写入U盘”中核对目标整盘；通常优先选择 FAT32。
+3. 点击“开始制作”。程序挂载并检查 ISO；核对最终确认中的磁盘身份、清盘范围与文件系统，再确认格式化。
+4. 拆分、复制和内容校验会自动继续，可在同一窗口查看进度和日志。
+5. 制作完成后，按需清理临时 SWM，选择是否安全弹出 U 盘与 ISO。
 
-NTFS 也沿用相同拆分规则：install.wim 大于 **4,294,967,295 字节**才拆分。DISM 使用 /FileSize:4000，生成多少个分卷由实际内容决定，每个生成文件还会再检查大小。所有分卷复制到 sources 目录。FAT32 与 SWM 的背景见 [Microsoft 安装介质说明](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/install-windows-from-a-usb-flash-drive?view=windows-11) 和 [映像拆分说明](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/split-a-windows-image--wim--file-to-span-across-multiple-dvds?view=windows-11)。
+部分 UEFI 固件可能不支持直接从 NTFS 启动；程序不会自动改选 NTFS。SWM 分卷使用 DISM `/FileSize:4000`，实际分卷数由映像内容决定，每卷都会再检查大小与编号。内容校验会多读取一次源文件及目标文件，不是介质寿命或坏块检测。
 
 <details>
-<summary>制作前核对什么？环境与兼容性有哪些限制？</summary>
+<summary>系统要求、临时文件与兼容性</summary>
 
-程序排除系统盘、启动盘、离线和只读磁盘；核对界面选择快照、设备身份、分区布局、源 ISO、运行程序和临时目录所在磁盘。ISO 或程序放在准备清空的 U 盘上时会停止。无法确认身份、格式化结果或复制大小时，也会停止后续步骤。
-
-这些检查不能替代备份与人工核对。进度为阶段进度；复制整体按字节估算。最终校验为**文件大小校验**，没有宣称对每个安装文件进行密码学哈希校验。
-
-### 环境与限制
-
-- 面向 Windows 10 / 11 x64，依赖系统自带 Windows PowerShell 5.1、WPF、Storage、DISM 与 robocopy。
-- USB 容量至少 8 GiB，本流程重建 MBR 单分区，上限 2 TiB；实际所需容量由 ISO 大小决定。
-- 安装介质需要 efi/boot/bootx64.efi、sources/boot.wim 和 setup.exe，主要面向 x64 UEFI 安装。
-- 识别和卷标以安装映像索引 1 为依据；多版本 ISO 不表示只安装此版本。发行版本可能用 ISO 文件名辅助判断，不能验证错误重命名。
-- 不是多系统引导工具；不下载 Windows、不提供激活，也不承诺适用于所有固件。
-- 强制结束会关闭程序，U 盘可能需要重新制作；自动挂载的 ISO 可能保留。
-- 当前未签名。Defender 单次文件扫描、模拟测试与实机启动验证是不同的检查，见 [验证记录](docs/VALIDATION.md)。
+- 面向 **Windows 10 / 11 x64**，安装介质主要面向 x64 UEFI；不宣称支持 Legacy BIOS、ARM64 或 WinPE。
+- 无 .NET、无 PowerShell，不代表删除任意系统组件后仍能使用。界面需要 Win32 桌面、GDI+、SetupAPI 和存储驱动；制作使用系统 ISO/WIM 接口，拆分使用 `dism.exe`，NTFS 格式化使用 `format.com`。精简 Windows 需保留所选流程必需组件。
+- “单文件”指分发时只需一个 EXE。运行时会创建本次日志、临时 SWM，并提取独立 FAT32 工具及对应源码/许可；本地磁盘需有足够空间。
+- 程序排除系统/启动盘、离线和只读设备，复核设备身份、分区布局及路径。ISO、运行程序或临时目录位于目标盘时停止；这些检查不能代替备份和人工核对。
+- 安装映像以索引 1 识别；多版本 ISO 不表示只安装此版本。发行版本可能用文件名辅助判断，不能验证同系列 ISO 被错误重命名。
+- 强制结束可能使 U 盘需要重新制作；自动挂载的 ISO 也可能保留。日志存于本次任务目录，可用窗口“导出诊断”排查。
+- 不下载 Windows、不提供激活，也不是多系统引导工具。
 
 </details>
 
+## 已验证到哪一步
+
+原生版已通过 **962 项自动化断言**，以及生产界面的 **5,000 条日志 / 10,000 次进度更新**测试。PE 检查确认 x64 原生程序、无 CLR；实时保护开启时，Defender 文件扫描未检出。
+
+用户收到 preview.14 后提供的完整日志记录：**Kingston 57.8 GiB 全容量 FAT32 / 32 KiB 簇、57.7 GiB 可用，2 个 SWM，1,067 个文件复制与内容校验，临时 SWM 清理、USB 和 ISO 弹出全部成功。** 日志本身未记录版本及 EXE 哈希，结论限于该次配置。
+
+实际 UEFI 启动、NTFS 实机和更多设备/系统仍待补测；文件扫描不等于完整制作动态检测或所有杀毒软件兼容。EXE 当前未签名，因此保持 **Pre-release**。[原生验收记录](native/ACCEPTANCE.md) · [USB 弹出修复与复测](native/USB-EJECT-preview14.md) · [beta.3 历史验证](docs/VALIDATION.md)
+
 <details>
-<summary>开发者：从源码构建与预览</summary>
+<summary>开发者：构建原生版</summary>
 
-在仓库根目录的 Windows PowerShell 5.1 中运行：
+原生源码位于 `native/`。使用 llvm-mingw，在仓库根目录的命令提示符中执行：
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\build\Build-Win11Usb.ps1
-powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\tests\Run-Tests.ps1
+```bat
+native\build.cmd "C:\path\to\llvm-mingw\bin" full
+native\test.cmd "C:\path\to\llvm-mingw\bin"
+native\test-ui.cmd "C:\path\to\llvm-mingw\bin"
 ```
 
-下载源码包后，在仓库根目录构建。输出为 dist/Win11Usb.exe。使用 Windows 自带 .NET Framework C# 编译器，构建不需要 PS2EXE、Node.js 或 NuGet。C# 直接创建界面，通过标准应用清单请求管理员权限；用户确认开始后才在同进程后台托管制作 Runspace。制作时仍会调用系统 DISM、robocopy 等命令。
+制作版输出为 `dist\Win11Usb-NativeReview-v0.2.0-preview.14.exe`，发布时采用上表中的版本化文件名。省略 `full` 可构建不链接制作后端的只读验证版；支持只读设备诊断、`--eject-report` 和示例界面预览。
 
-```powershell
-.\dist\Win11Usb.exe --self-check
-.\dist\Win11Usb.exe --preview
-.\dist\Win11Usb.exe --preview-running
-.\dist\Win11Usb.exe --preview-empty
-```
-
-预览使用示例数据，不挂载 ISO、不运行制作引擎、不修改磁盘。正式制作中的 FAT32 兼容工具会解压到本次本地工作目录。
-
-[架构说明](docs/ARCHITECTURE.md) · [贡献指南](https://github.com/kaixinit/Win11Usb/blob/main/CONTRIBUTING.md)
+构建也不需要 PowerShell。旧版 `src/`、`build/` 和对应脚本保留，用于 beta.3。[原生架构、依赖和构建细节](native/README.md)
 
 </details>
 
-## 当前验证范围
+## 反馈与许可
 
-**beta.3 已通过 GitHub Windows 构建和 11 组回归测试。** 用户提供的实机日志记录了 FAT32 制作完成、复制大小校验通过、临时文件清理及 USB/ISO 弹出成功，并反馈全程未报毒。
-
-当前实机证据覆盖一支 14.6 GB Lenovo U 盘、FAT32、大 WIM 拆分和安全弹出；从 U 盘进入安装程序、NTFS 实机、更多硬件及 DPI 仍需补测。先按 Pre-release 使用，不把一次成功等同于完整兼容认证。
-
-EXE 当前未签名。旧 beta.1 / beta.2 已撤回；beta.3 的本地扫描与一次实机反馈不保证所有安全软件均无检测。[完整验证记录与脱敏日志](docs/VALIDATION.md) · [安全说明](https://github.com/kaixinit/Win11Usb/blob/main/SECURITY.md)
-
-## 反馈与许可证
-
-发现问题或有功能建议，欢迎[提交 Issue](https://github.com/kaixinit/Win11Usb/issues)。请用模板提供版本、系统构建号、出错阶段及脱敏日志。日志可能含个人路径、磁盘信息，公开前请检查。也欢迎分享 U 盘与固件兼容性结果，帮助补齐测试矩阵。
+欢迎[提交 Issue](https://github.com/kaixinit/Win11Usb/issues)，附版本、Windows 构建号、出错阶段和脱敏日志。也欢迎反馈 U 盘与固件启动结果，帮助补齐兼容性记录。公开日志前，请检查个人路径和设备信息。
 
 如果 Win11Usb 对你有帮助，欢迎点一个 **Star**，让更多需要制作安装 U 盘的人找到它。
 
-项目原创代码按 [MIT](LICENSE) 许可。独立运行的 Ridgecrop fat32format 及其原始源码保留 GPL 声明，不改标为 MIT；配套源码、许可与哈希见 [第三方说明](THIRD_PARTY_NOTICES.md)。图标已替换为本项目原创生成资产，并提供来源记录。
+原创代码采用 [MIT](LICENSE)。独立 FAT32 工具及对应源码保留 GPL；界面矢量图标保留 Apache 2.0，静态运行库保留各自许可。详见 [第三方说明](THIRD_PARTY_NOTICES.md) 与 [原生运行库许可](native/third_party/RUNTIME-LICENSES.txt)。项目不分发 Windows ISO 或安装文件。

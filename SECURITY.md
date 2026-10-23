@@ -1,6 +1,18 @@
 # 安全与问题反馈
 
-旧 beta.2 曾在启动时被 Defender 以 `Behavior:Win32/DefenseEvasion.A!ml` 隔离，旧 beta.1 / beta.2 已撤回。beta.3 改为原生 WPF 启动后，用户在原报错电脑报告正常启动、完成 FAT32 大 WIM 制作且全程未报毒；经脱敏的日志与本地验证见 [验证记录](docs/VALIDATION.md)。没有获得 Microsoft 对旧版的误报认定，也不把该次通过作为所有环境的安全保证。请勿恢复旧版隔离文件继续使用。
+## 原生预发布版
+
+`v0.2.0-preview.14` 使用 C++ / Win32 界面和制作后端，不依赖 .NET、WPF、PowerShell、WMI/CIM 或脚本启动器。独立 FAT32 helper、大 WIM 拆分和 NTFS 格式化按明确参数运行；程序不会为运行绕过安全软件，也不通过混淆或加密脚本规避检测。无需安装这些应用运行库不等于不需要 Windows 自带的存储、映像及桌面组件。
+
+2026-10-23，Defender 安全情报版本 1.461.155.0、实时保护开启时，最终原生 EXE 的文件扫描返回 0、未检出。用户收到 preview.14 后提交的一份 Kingston 57.8 GiB 日志记录 FAT32、2 个 SWM、1,067 个文件复制与内容校验、临时清理、USB 及 ISO 弹出均成功；日志未内载版本或 EXE 哈希，结论限于该次配置。这份制作日志不包含目标电脑 Defender 事件证据，不能据此宣称完整动态检测、所有硬件或所有安全软件均已通过。
+
+原生版当前未签名，仍作为独立 Pre-release 验证；`v0.1.0-beta.3` 标签和附件保留。文件哈希、扫描记录、已测与未测范围见 [验证记录](docs/VALIDATION.md) 和 [原生版发布说明](docs/releases/v0.2.0-preview.14.md)。
+
+## 历史检测与 beta.3
+
+旧 beta.2 曾在启动时被 Defender 以 `Behavior:Win32/DefenseEvasion.A!ml` 隔离，旧 beta.1 / beta.2 已撤回。beta.3 改为 C# 直接创建 WPF 窗口后，用户在原报错电脑报告正常启动、完成 FAT32 大 WIM 制作且全程未报毒；beta.3 制作后端仍使用其原有 PowerShell 环境。该历史反馈不转算为原生版的动态检测结果。没有获得 Microsoft 对旧版的误报认定，也不把单次通过作为所有环境的安全保证。请勿恢复旧版隔离文件继续使用。
+
+## 反馈与核对
 
 当前为测试版本。涉及误选磁盘、身份复核绕过或异常继续清盘的问题，请优先通过 [GitHub 私密漏洞报告](https://github.com/kaixinit/Win11Usb/security/advisories/new) 联系维护者 kaixinit，仓库已启用该功能；不要公开含个人路径、序列号、账号或令牌的原始日志。
 

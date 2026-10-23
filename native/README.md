@@ -65,9 +65,17 @@ native\test-ui.cmd "C:\path\to\llvm-mingw\bin"
 native\out\Win11Usb-NativeTests.exe native\tests\identity-fixtures.tsv work\native-elevated-test-unique --wim-roundtrip
 ```
 
-该附加测试不操作物理磁盘。普通权限下尝试 WIMCaptureImage 返回 1314，未将此项列为通过。标准测试另含无需捕获权限的实际合成 WIM 只读加载检查，样本说明见 [tests/fixtures](tests/fixtures/README.md)。用户实机日志已确认目标安装 ISO 挂载、WIM 临时目录与索引 1 读取、DISM 查询、Kingston 全容量 FAT32、拆分、复制和内容校验通过。NTFS、其他介质、修正后的 USB 安全弹出与 UEFI 实际引导等未测范围仍需按 [验收表](ACCEPTANCE.md) 完成，不能用测试替身结果代替实机验收。
+该附加测试不操作物理磁盘。普通权限下尝试 WIMCaptureImage 返回 1314，未将此项列为通过。标准测试另含无需捕获权限的实际合成 WIM 只读加载检查，样本说明见 [tests/fixtures](tests/fixtures/README.md)。用户实机日志已确认目标安装 ISO 挂载、WIM 临时目录与索引 1 读取、DISM 查询、Kingston 全容量 FAT32、拆分、复制和内容校验通过。NTFS、其他介质的安全弹出与 UEFI 实际引导等未测范围仍需按 [验收表](ACCEPTANCE.md) 完成，不能用测试替身结果代替实机验收。
 
 ## 只读诊断与界面预览
+
+原生预发布的打包使用 Python 3.11 或更新版本，直接读取已检查的制作 EXE，不重新编译。先提交对应源码与文档，再运行：
+
+```bat
+python native\package-release.py --exe dist\Win11Usb-NativeReview-v0.2.0-preview.14.exe --expected-exe-sha256 304221B1CDBF32A9A8F9282235EA77EF656B4CE2E1CBD3C2A1D56E81559A1451
+```
+
+输出独立版本文件名的 EXE、配套 ZIP、当前 Git 提交的源码 ZIP 和 `SHA256SUMS.txt`。脚本检查原生 PE、版本及指定 EXE 哈希、包内源码和许可；输出已存在则停止，不覆盖旧附件，也不推送或发布。Python 仅用于打包，不是应用运行依赖。
 
 ```bat
 Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --list-disks disks.json
