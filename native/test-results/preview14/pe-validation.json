@@ -1,0 +1,56 @@
+[
+  {
+    "file": "Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe",
+    "bytes": 1963520,
+    "sha256": "8C04C9C7381F8387F7F54AD9A8F70E9E1BBC20E04323E30211104D1BD10AB9EA",
+    "machine": "AMD64",
+    "subsystem": "Windows GUI",
+    "clr_header": false,
+    "static_application_runtime": true,
+    "dotnet_import": false,
+    "imports": [
+      "COMCTL32.dll",
+      "comdlg32.dll",
+      "GDI32.dll",
+      "gdiplus.dll",
+      "USER32.dll",
+      "SHELL32.dll",
+      "ole32.dll",
+      "ADVAPI32.dll",
+      "SETUPAPI.dll",
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ],
+    "aslr": true,
+    "dep": true,
+    "high_entropy_va": true,
+    "embedded_notices": true
+  },
+  {
+    "file": "Win11Usb-NativeReview-v0.2.0-preview.14.exe",
+    "bytes": 3090944,
+    "sha256": "304221B1CDBF32A9A8F9282235EA77EF656B4CE2E1CBD3C2A1D56E81559A1451",
+    "machine": "AMD64",
+    "subsystem": "Windows GUI",
+    "clr_header": false,
+    "static_application_runtime": true,
+    "dotnet_import": false,
+    "imports": [
+      "COMCTL32.dll",
+      "comdlg32.dll",
+      "GDI32.dll",
+      "gdiplus.dll",
+      "USER32.dll",
+      "SHELL32.dll",
+      "ole32.dll",
+      "ADVAPI32.dll",
+      "SETUPAPI.dll",
+      "msvcrt.dll",
+      "KERNEL32.dll"
+    ],
+    "aslr": true,
+    "dep": true,
+    "high_entropy_va": true,
+    "embedded_notices": true
+  }
+]

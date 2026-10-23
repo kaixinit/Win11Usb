@@ -1,4 +1,5 @@
 #include "win11usb.hpp"
+#include "eject.hpp"
 #include <algorithm>
 #include <shellapi.h>
 
@@ -11,6 +12,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
         for (int i = 1; i < argc; i++)
             args.push_back(argv[i]);
         LocalFree(argv);
+        for (size_t i = 0; i < args.size(); i++)
+            if (args[i] == L"--eject-report") {
+                if (i + 1 == args.size())
+                    throw Error(L"--eject-report 需要指定只读诊断报告路径。");
+                WriteUtf8(FullPath(args[i + 1]), UsbEjectReport(ReadDisks()));
+                return 0;
+            }
         for (size_t i = 0; i < args.size(); i++)
             if (args[i] == L"--dependency-report") {
                 if (i + 1 == args.size())

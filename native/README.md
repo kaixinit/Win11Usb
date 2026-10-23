@@ -1,6 +1,8 @@
 # Win11Usb C++ / Win32 原生迁移验证版
 
-目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.13`。**已收到一次 Kingston FAT32 制作及内容校验通过的实机日志；新版安全弹出与 UEFI 启动仍待验收，不应替换正式下载。**
+目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.14`。**Kingston FAT32 制作及内容校验已收到实机通过日志；新版安全弹出与 UEFI 启动仍待验收，不应替换正式下载。**
+
+preview.14 修正 USB 安全弹出的设备类识别：旧代码误把 `GUID_DEVCLASS_SYSTEM` 当成 USB 类，导致实际 USB 存储父节点在规划时被拒绝。现在按 SDK 定义分类，System 类继续拒绝；保留独立 USB 边界、唯一所选磁盘、能力和子树范围核验。新增从原始 GUID 经生产分类到规划的测试，以及 `--eject-report` 只读诊断；窗口“导出诊断”也附带匿名设备链与规划报告。814 项主测试和 148 项普通文件 FAT32 断言（合计 962 项）、生产 UI 的 5,000 条日志与 10,000 次进度更新测试通过。两个 EXE 的 PE/依赖检查通过，无 CLR 或新增运行依赖；实时保护开启时，Defender 1.461.155.0 文件扫描未检出。最新用户日志未载明版本，确认制作、2 个 SWM、1,067 个文件复制及逐内容校验、临时清理和 ISO 弹出通过；USB 仍在规划阶段失败，未实际提交弹出请求。修正后的 USB 弹出仍待真机验证，见 [安全弹出设备类修正报告](USB-EJECT-preview14.md)。
 
 preview.13 按用户要求将默认窗口收紧为 840×760 DIP，保留底部完整操作区并停止随长内容自动增高；补齐首次 NTFS 确认与强制结束提示。生产弹窗规格集中共享，76 项新增规格断言及生产 UI 回归通过。实际只读窗口截图与人工检查中断范围见 [最终界面复核](UI-CHECK-preview13.md)。
 
@@ -24,8 +26,8 @@ preview.5 的任务目录、DISM scratch、持续日志、SWM 清理和新分区
 
 | 文件 | 用途 |
 | --- | --- |
-| `Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
-| `Win11Usb-NativeReview-v0.2.0-preview.13.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
+| `Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
+| `Win11Usb-NativeReview-v0.2.0-preview.14.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
 
 两者均使用原生 x64 PE、系统 MSVCRT 和静态 C++ 运行库，没有 CLR 头或托管程序集。无需额外安装 .NET、VC++ Redistributable、PowerShell 或 WebView。单文件指分发时一个 EXE；制作时仍会在本机创建日志、临时 SWM，并提取独立 FAT32 工具和对应源码/许可。
 
@@ -63,20 +65,21 @@ native\test-ui.cmd "C:\path\to\llvm-mingw\bin"
 native\out\Win11Usb-NativeTests.exe native\tests\identity-fixtures.tsv work\native-elevated-test-unique --wim-roundtrip
 ```
 
-该附加测试不操作物理磁盘。普通权限下尝试 WIMCaptureImage 返回 1314，未将此项列为通过。标准测试另含无需捕获权限的实际合成 WIM 只读加载检查，样本说明见 [tests/fixtures](tests/fixtures/README.md)。真实 USB 驱动上的 IOCTL、FAT32/NTFS 格式化、大 WIM 拆分、整盘复制、安全弹出和 UEFI 引导仍需按 [验收表](ACCEPTANCE.md) 实测；用户已反馈 ISO 可挂载，索引读取修复仍需目标安装 ISO 复测。
+该附加测试不操作物理磁盘。普通权限下尝试 WIMCaptureImage 返回 1314，未将此项列为通过。标准测试另含无需捕获权限的实际合成 WIM 只读加载检查，样本说明见 [tests/fixtures](tests/fixtures/README.md)。用户实机日志已确认目标安装 ISO 挂载、WIM 临时目录与索引 1 读取、DISM 查询、Kingston 全容量 FAT32、拆分、复制和内容校验通过。NTFS、其他介质、修正后的 USB 安全弹出与 UEFI 实际引导等未测范围仍需按 [验收表](ACCEPTANCE.md) 完成，不能用测试替身结果代替实机验收。
 
 ## 只读诊断与界面预览
 
 ```bat
-Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --list-disks disks.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --dependency-report dependencies.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview
-Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview-blocked
-Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview-running
-Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview-dialog
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --list-disks disks.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --eject-report eject-report.txt
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --dependency-report dependencies.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --preview
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --preview-blocked
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --preview-running
+Win11Usb-NativeReadOnly-v0.2.0-preview.14.exe --preview-dialog
 ```
 
-`--preview*` 使用明确标注的示例数据，不是制作结果。弹窗预览点击“预览制作状态”打开，不会执行格式化。系统菜单提供“关于 Win11Usb / 许可证”。JSON 诊断不输出设备原始序列号或 PnP 标识。
+`--preview*` 使用明确标注的示例数据，不是制作结果。弹窗预览点击“预览制作状态”打开，不会执行格式化。系统菜单提供“关于 Win11Usb / 许可证”。JSON 诊断不输出设备原始序列号或 PnP 标识。`--eject-report` 和窗口“导出诊断”中的弹出报告只读取设备属性、匿名父子关系并运行规划，不锁卷、不卸载卷、不提交安全弹出请求；规划通过不等于已经安全弹出。
 
 ## 许可与来源
 

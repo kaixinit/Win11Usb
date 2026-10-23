@@ -1,0 +1,23 @@
+{
+  "source_sha256": "0d1cddef3fb26a3026c2cc16b0a9ddfeb7ccc1c506058e1d1f8a07a196f221e0",
+  "application_version_recorded": false,
+  "reported_device": "Kingston DataTraveler 3.0",
+  "reported_disk_capacity_bytes": 62008590336,
+  "reported_partition_offset_bytes": 1048576,
+  "reported_partition_length_bytes": 62006493184,
+  "reported_filesystem": "FAT32",
+  "reported_cluster_bytes": 32768,
+  "swm_files": 2,
+  "copied_paths": 1067,
+  "content_verified_paths": 1067,
+  "path_order_equal": true,
+  "duplicate_copy_paths": 0,
+  "duplicate_verified_paths": 0,
+  "no_fatal_stopped_marker": true,
+  "usb_plan_failure": true,
+  "usb_request_reached": false,
+  "iso_ejected": true,
+  "temporary_swm_cleaned": true,
+  "uefi_boot_hardware_test": "not demonstrated",
+  "preview14_usb_removal_test": "pending; no USB storage on build host"
+}

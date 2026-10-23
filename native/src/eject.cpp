@@ -1,5 +1,7 @@
 #include "eject.hpp"
 #include <algorithm>
+#include <devguid.h>
+#include <objbase.h>
 
 namespace wu {
 namespace {
@@ -20,7 +22,8 @@ bool PhysicalUsb(const EjectNode &node) {
            hardware.find(L"&mi_") == hardware.npos;
 }
 bool Removable(const EjectNode &node) {
-    return node.capabilitiesKnown && (node.capabilities & (CM_DEVCAP_REMOVABLE | CM_DEVCAP_EJECTSUPPORTED)) &&
+    return node.capabilitiesKnown &&
+           (node.capabilities & (CM_DEVCAP_REMOVABLE | CM_DEVCAP_EJECTSUPPORTED)) &&
            !(node.capabilities & (CM_DEVCAP_DOCKDEVICE | CM_DEVCAP_NONDYNAMIC));
 }
 void CheckScope(DEVINST candidate, DEVINST disk, const std::wstring &expected, const EjectOps &ops) {
@@ -63,6 +66,23 @@ std::wstring Hint(const std::wstring &value) {
     return text.substr(0, 120);
 }
 } // namespace
+EjectKind ClassifyEjectClass(const std::wstring &text) {
+    GUID cls{};
+    if (text.size() != 38 || text.front() != L'{' || text.back() != L'}' ||
+        FAILED(CLSIDFromString(text.c_str(), &cls)))
+        throw Error(L"弹出设备的类别 GUID 无效，已停止自动弹出。");
+    // Use SDK definitions: GUID_DEVCLASS_SYSTEM is not GUID_DEVCLASS_USB.
+    // This adapter is shared by native device reads and raw-class regression tests.
+    if (IsEqualGUID(cls, GUID_DEVCLASS_DISKDRIVE))
+        return EjectKind::Disk;
+    if (IsEqualGUID(cls, GUID_DEVCLASS_SCSIADAPTER) || IsEqualGUID(cls, GUID_DEVCLASS_HDC))
+        return EjectKind::Storage;
+    if (IsEqualGUID(cls, GUID_DEVCLASS_USB))
+        return EjectKind::Usb;
+    if (IsEqualGUID(cls, GUID_DEVCLASS_VOLUME) || IsEqualGUID(cls, GUID_DEVCLASS_VOLUMESNAPSHOT))
+        return EjectKind::Volume;
+    return EjectKind::Other;
+}
 EjectNode ReadEjectNode(DEVINST id) {
     EjectNode node;
     node.id = id;
@@ -72,19 +92,11 @@ EjectNode ReadEjectNode(DEVINST id) {
         throw Error(L"无法读取弹出设备身份（CM " + std::to_wstring(result) + L"）。");
     node.instance = instance;
     node.service = Property(id, CM_DRP_SERVICE, true);
-    auto cls = Lower(Property(id, CM_DRP_CLASSGUID));
-    if (cls == L"{4d36e967-e325-11ce-bfc1-08002be10318}")
-        node.kind = EjectKind::Disk;
-    else if (cls == L"{4d36e97b-e325-11ce-bfc1-08002be10318}" ||
-             cls == L"{4d36e96a-e325-11ce-bfc1-08002be10318}")
-        node.kind = EjectKind::Storage;
-    else if (cls == L"{4d36e97d-e325-11ce-bfc1-08002be10318}")
-        node.kind = EjectKind::Usb;
-    else if (cls == L"{71a27cdd-812a-11d0-bec7-08002be2092f}" ||
-             cls == L"{533c5b84-ec70-11d2-9505-00c04f79deaf}")
-        node.kind = EjectKind::Volume;
+    node.classGuid = Property(id, CM_DRP_CLASSGUID);
+    node.kind = ClassifyEjectClass(node.classGuid);
     ULONG bytes = sizeof node.capabilities, type = 0;
-    result = CM_Get_DevNode_Registry_PropertyW(id, CM_DRP_CAPABILITIES, &type, &node.capabilities, &bytes, 0);
+    result =
+        CM_Get_DevNode_Registry_PropertyW(id, CM_DRP_CAPABILITIES, &type, &node.capabilities, &bytes, 0);
     node.capabilitiesKnown = result == CR_SUCCESS && type == REG_DWORD && bytes == sizeof(DWORD);
     return node;
 }
@@ -193,6 +205,7 @@ std::wstring EjectFailure(const EjectReply &reply) {
     return reason + L"（CM " + std::to_wstring(reply.code) + L"，veto " + std::to_wstring(reply.veto) +
            L"）U 盘尚未安全弹出，请稍后通过系统安全弹出。";
 }
+#ifndef WIN11USB_READONLY
 void EjectUsbChecked(DEVINST disk, const std::wstring &expected, const EjectOps &ops,
                      std::atomic<bool> &stop) {
     CheckCancel(stop);
@@ -220,8 +233,9 @@ void EjectUsbChecked(DEVINST disk, const std::wstring &expected, const EjectOps 
                 ops.wait(500);
                 continue;
             }
-            bool unsupported = last.code == CR_REMOVE_VETOED && (last.veto == PNP_VetoIllegalDeviceRequest ||
-                                                                 last.veto == PNP_VetoLegacyDevice);
+            bool unsupported =
+                last.code == CR_REMOVE_VETOED &&
+                (last.veto == PNP_VetoIllegalDeviceRequest || last.veto == PNP_VetoLegacyDevice);
             if (!unsupported)
                 throw Error(EjectFailure(last));
             break; // Try only another independently checked candidate inside the same USB boundary.
@@ -283,4 +297,5 @@ void EjectUsbNative(const Disk &disk, const std::function<void()> &validate,
     ops.wait = [](DWORD milliseconds) { Sleep(milliseconds); };
     EjectUsbChecked(node, disk.pnp, ops, stop);
 }
+#endif // Read-only diagnostics never compile a device-removal entry point.
 } // namespace wu

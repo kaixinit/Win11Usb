@@ -1,0 +1,6 @@
+{
+  "readonly_no_eject_request": true,
+  "readonly_no_process_creation": true,
+  "full_eject_request_present": true,
+  "full_process_creation_present": true
+}

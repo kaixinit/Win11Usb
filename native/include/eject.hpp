@@ -11,6 +11,7 @@ struct EjectNode {
     EjectKind kind = EjectKind::Other;
     DWORD capabilities = 0;
     bool capabilitiesKnown = false;
+    std::wstring classGuid;
 };
 struct EjectReply {
     CONFIGRET code = CR_SUCCESS;
@@ -28,7 +29,10 @@ struct EjectOps {
     std::function<void(DWORD)> wait;
 };
 EjectNode ReadEjectNode(DEVINST node);
-std::vector<EjectNode> PlanUsbEject(DEVINST disk, const std::wstring &expectedInstance, const EjectOps &ops);
+EjectKind ClassifyEjectClass(const std::wstring &classGuid);
+std::wstring UsbEjectReport(const Catalog &catalog);
+std::vector<EjectNode> PlanUsbEject(DEVINST disk, const std::wstring &expectedInstance,
+                                    const EjectOps &ops);
 std::wstring EjectFailure(const EjectReply &reply);
 void EjectUsbChecked(DEVINST disk, const std::wstring &expectedInstance, const EjectOps &ops,
                      std::atomic<bool> &stop);
