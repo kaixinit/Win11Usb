@@ -37,6 +37,8 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
         };
         p = backend.Prepare(r, preparationHooks, stop);
         result.work = p.work;
+        result.imageDisplay = p.image.display;
+        result.volumeLabel = p.image.label;
         backend.Validate(r, p, true);
         CheckCancel(stop);
         log(L"安装系统：" + p.image.display);
@@ -62,10 +64,11 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
         stage(3, L"检查 install.wim 大小并按需拆分");
         std::vector<File> swm;
         if (p.plan.split) {
-            if (!ask(Prompt::Split, L"install.wim 超过 4,294,967,295 字节。\r\n将先在本机拆分为 "
-                                    L"SWM，再复制到 U 盘。\r\nNTFS 也沿用相同拆分规则。"))
-                throw Cancelled();
+            // beta.3 confirms the destructive rebuild once, then automatically
+            // continues through split, copy and verification. Keep those stages
+            // cancellable without adding another affirmative UI pause.
             backend.Validate(r, p, false);
+            CheckCancel(stop);
             swm = backend.Split(p, h, stop);
             CheckSwm(swm);
             log(L"完成：本机生成 " + std::to_wstring(swm.size()) + L" 个 SWM 文件。");
@@ -74,16 +77,17 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
         uint64_t total = ManifestBytes(InstallationFiles(p, swm));
         if (total > r.disk.size || r.disk.size - total < 128 * MiB)
             throw Error(L"拆分后容量不足，停止复制。");
-        if (!ask(Prompt::Copy, L"将复制安装文件" + std::wstring(p.plan.split ? L"和全部 SWM 分卷" : L"") +
-                                   L"。\r\n目标：" + r.disk.friendly + L"\r\n" + target))
-            throw Cancelled();
         stage(4, L"复制安装文件");
         backend.Validate(r, p, false);
+        CheckCancel(stop);
         backend.Copy(r, p, target, swm, h, stop);
         stage(5, L"检查复制结果");
         backend.Validate(r, p, false);
+        CheckCancel(stop);
         backend.Verify(r, p, target, swm, h, stop);
         result.copied = true;
+        result.usbResult = L"U 盘保持连接，请稍后通过系统安全弹出。";
+        result.isoResult = L"ISO 保留挂载。";
         log(L"安装文件大小和内容校验通过，efi\\boot\\bootx64.efi 已就绪。");
         stage(6, L"清理本次临时 SWM");
         if (swm.empty())
@@ -101,18 +105,22 @@ Result RunWorkflow(const Request &r, Backend &backend, const Hooks &h, std::atom
         if (ask(Prompt::EjectUsb, L"设备：" + r.disk.friendly + L"\r\n" + target)) {
             try {
                 backend.EjectUsb(r, target);
-                log(L"U 盘已安全弹出，可以拔下。");
+                result.usbResult = L"U 盘已安全弹出，可以拔下。";
+                log(result.usbResult);
             } catch (const Error &e) {
                 result.ejectWarning = e.text;
+                result.usbResult = L"U 盘尚未安全弹出：" + e.text;
                 log(L"复制校验通过，但 U 盘尚未安全弹出：" + e.text);
             }
         }
         if (ask(Prompt::EjectIso, L"是否弹出本次使用的 ISO？\r\n" + r.iso)) {
             try {
                 backend.EjectIso();
-                log(L"已弹出 ISO。");
+                result.isoResult = L"已弹出 ISO。";
+                log(result.isoResult);
             } catch (const Error &e) {
-                log(L"制作已完成，但 ISO 保留挂载：" + e.text);
+                result.isoResult = L"ISO 弹出未确认：" + e.text;
+                log(L"制作已完成，但 " + result.isoResult);
             }
         }
         log(L"制作完成 | " + r.disk.friendly + L" | " + p.image.display + L" | " + r.fs + L" | " +

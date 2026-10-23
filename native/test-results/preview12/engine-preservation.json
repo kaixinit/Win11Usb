@@ -1,0 +1,42 @@
+[
+  {
+    "file": "backend.cpp",
+    "unchanged": true,
+    "sha256": "1503B0AD6146784F833A2A32ED49DBA1F33C9883A90E99345736620D9076CF52"
+  },
+  {
+    "file": "disk_rebuild.cpp",
+    "unchanged": true,
+    "sha256": "C25BCB8D41835F292B1F156708CF6AE46438EBBE9238454E4532721875F9C8EA"
+  },
+  {
+    "file": "postformat.cpp",
+    "unchanged": true,
+    "sha256": "74BA2C2952C57997B18FEA8ECF3E9F53642CF27DC864DD11CBEFB0C4DB57C47B"
+  },
+  {
+    "file": "workspace.cpp",
+    "unchanged": true,
+    "sha256": "7DAD312371EB843D3996F51E1A1BECA6793DF2A45A947241AFF9E238E9085688"
+  },
+  {
+    "file": "files.cpp",
+    "unchanged": true,
+    "sha256": "DED79BA6ECBC63EF9CB0EF5C92FBB43F5B1B7C2E6DB76B4620304D2B248FBCDE"
+  },
+  {
+    "file": "process.cpp",
+    "unchanged": true,
+    "sha256": "3DF9C4D188C3260E94A97E88CE19137EB2AA77AF09413C7A002BF68A9C3F2A7C"
+  },
+  {
+    "file": "wim.cpp",
+    "unchanged": true,
+    "sha256": "1687A2484D7C782D961BEA452904DD2C6E9C40AA7D3A07AE777AEB60FA68CFB1"
+  },
+  {
+    "file": "eject.cpp",
+    "unchanged": true,
+    "sha256": "05460F5B0AC89A849880604D9FEA0EE96F0E5F81CA753B438564433F9D581A60"
+  }
+]

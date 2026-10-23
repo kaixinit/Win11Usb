@@ -1,0 +1,9 @@
+{
+  "scan_started": "2026-10-23T08:25:03.7319472+08:00",
+  "full_exit_code": 0,
+  "readonly_exit_code": 0,
+  "realtime_protection": true,
+  "signature": "1.461.155.0",
+  "signature_updated": "2026-10-23T00:54:58.0000000+08:00",
+  "scan_type": "custom file scan; not complete workflow dynamic scan"
+}

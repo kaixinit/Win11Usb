@@ -180,6 +180,7 @@ struct Result {
     bool copied = false, cancelled = false, rebuildStarted = false;
     std::wstring error, work;
     std::wstring ejectWarning;
+    std::wstring imageDisplay, volumeLabel, usbResult, isoResult;
 };
 class Backend {
   public:

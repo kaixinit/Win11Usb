@@ -172,7 +172,7 @@ void WriteDependencies(const std::wstring &path) {
     std::wstring s =
         L"{\"native\":true,\"dotnet_required\":false,\"powershell_required\":false,\"system_components\":[";
     bool first = true;
-    for (auto name : {L"virtdisk.dll", L"wimgapi.dll", L"dism.exe", L"format.com"}) {
+    for (auto name : {L"gdiplus.dll", L"virtdisk.dll", L"wimgapi.dll", L"dism.exe", L"format.com"}) {
         if (!first)
             s += L",";
         first = false;

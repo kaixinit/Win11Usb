@@ -1,3 +1,6 @@
+#include "dialog.hpp"
+#include "dialog_specs.hpp"
+#include "product_icons.hpp"
 #include "ui_updates.hpp"
 #include "win11usb.hpp"
 #include <algorithm>
@@ -17,7 +20,26 @@ constexpr UINT WM_CATALOG = WM_APP + 10, WM_UI_UPDATE = WM_APP + 11, WM_PROMPT_V
 constexpr DWORD MainWindowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 constexpr UINT_PTR UpdateTimer = 92;
 constexpr UINT UpdateInterval = 100;
+constexpr int DefaultWidth = 840, DefaultHeight = 760, MinimumWidth = 720, MinimumHeight = 650;
 enum { ID_ISO = 101, ID_REFRESH, ID_DISK, ID_FAT, ID_NTFS, ID_START, ID_STOP, ID_LOG, ID_EXPORT };
+bool DispatchMainKey(HWND window, const MSG &message) {
+    if (message.message != WM_KEYDOWN || message.wParam != VK_RETURN || !IsWindowEnabled(window))
+        return false;
+    HWND focus = GetFocus();
+    if (!focus || !IsChild(window, focus) || !IsWindowEnabled(focus))
+        return false;
+    wchar_t cls[32]{};
+    GetClassNameW(focus, cls, 32);
+    DWORD type = GetWindowLongPtrW(focus, GWL_STYLE) & BS_TYPEMASK;
+    if (_wcsicmp(cls, L"BUTTON") ||
+        (type != BS_OWNERDRAW && type != BS_PUSHBUTTON && type != BS_DEFPUSHBUTTON))
+        return false;
+    // IsDialogMessage sends IDOK (1) for owner-drawn buttons with product IDs.
+    // Activate the focused action explicitly, while leaving combo/radio keys
+    // native.
+    SendMessageW(focus, BM_CLICK, 0, 0);
+    return true;
+}
 struct Ui;
 void Fill(HDC dc, RECT r, COLORREF c) {
     HBRUSH b = CreateSolidBrush(c);
@@ -25,14 +47,22 @@ void Fill(HDC dc, RECT r, COLORREF c) {
     DeleteObject(b);
 }
 void Rounded(HDC dc, RECT r, COLORREF fill, COLORREF border, int radius) {
-    HBRUSH b = CreateSolidBrush(fill);
-    HPEN p = CreatePen(PS_SOLID, 1, border);
-    auto ob = SelectObject(dc, b), op = SelectObject(dc, p);
-    RoundRect(dc, r.left, r.top, r.right, r.bottom, radius, radius);
-    SelectObject(dc, ob);
-    SelectObject(dc, op);
-    DeleteObject(b);
-    DeleteObject(p);
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float x = r.left + .5f, y = r.top + .5f, w = r.right - r.left - 1.0f, h = r.bottom - r.top - 1.0f;
+    float d = (float)std::min({radius * 2, (int)w, (int)h});
+    if (w <= 0 || h <= 0 || d <= 0)
+        return;
+    Gdiplus::GraphicsPath path;
+    path.AddArc(x, y, d, d, 180, 90);
+    path.AddArc(x + w - d, y, d, d, 270, 90);
+    path.AddArc(x + w - d, y + h - d, d, d, 0, 90);
+    path.AddArc(x, y + h - d, d, d, 90, 90);
+    path.CloseFigure();
+    Gdiplus::SolidBrush brush(Gdiplus::Color(255, GetRValue(fill), GetGValue(fill), GetBValue(fill)));
+    Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(border), GetGValue(border), GetBValue(border)));
+    graphics.FillPath(&brush, &path);
+    graphics.DrawPath(&pen, &path);
 }
 void Text(HDC dc, HFONT font, const std::wstring &s, RECT r, COLORREF c,
           UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE) {
@@ -42,164 +72,39 @@ void Text(HDC dc, HFONT font, const std::wstring &s, RECT r, COLORREF c,
     DrawTextW(dc, s.c_str(), (int)s.size(), &r, flags);
     SelectObject(dc, old);
 }
-struct DialogState {
-    std::wstring heading, message, details, hint, primary, secondary;
-    bool danger = false, answer = false, done = false;
-    HWND window = nullptr, body = nullptr, yes = nullptr, no = nullptr;
-    HFONT font = nullptr, bold = nullptr;
-    int dpi = 96;
-    int S(int n) const { return MulDiv(n, dpi, 96); }
-};
-LRESULT CALLBACK DialogProc(HWND w, UINT m, WPARAM a, LPARAM b) {
-    auto s = (DialogState *)GetWindowLongPtrW(w, GWLP_USERDATA);
-    if (m == WM_NCCREATE) {
-        s = (DialogState *)((CREATESTRUCTW *)b)->lpCreateParams;
-        SetWindowLongPtrW(w, GWLP_USERDATA, (LONG_PTR)s);
-        s->window = w;
-    }
-    if (!s)
-        return DefWindowProcW(w, m, a, b);
-    switch (m) {
-    case WM_CREATE: {
-        s->font = CreateFontW(-s->S(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
-                              CLEARTYPE_QUALITY, 0, L"Microsoft YaHei UI");
-        s->bold = CreateFontW(-s->S(21), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
-                              CLEARTYPE_QUALITY, 0, L"Microsoft YaHei UI");
-        s->body =
-            CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", s->details.c_str(),
-                            WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-                            22, 148, 550, 260, w, (HMENU)3, nullptr, nullptr);
-        s->no = CreateWindowExW(0, L"BUTTON", s->secondary.c_str(),
-                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 300, 426, 112, 38, w,
-                                (HMENU)IDCANCEL, nullptr, nullptr);
-        s->yes = CreateWindowExW(0, L"BUTTON", s->primary.c_str(),
-                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 426, 426, 146, 38, w,
-                                 (HMENU)IDOK, nullptr, nullptr);
-        for (HWND c : {s->body, s->no, s->yes})
-            SendMessageW(c, WM_SETFONT, (WPARAM)s->font, TRUE);
-        SendMessageW(s->body, EM_SETSEL, 0, 0);
-        return 0;
-    }
-    case WM_SIZE: {
-        int cw = LOWORD(b), ch = HIWORD(b);
-        MoveWindow(s->body, s->S(22), s->S(140), std::max(s->S(100), cw - s->S(44)),
-                   std::max(s->S(80), ch - s->S(222)), TRUE);
-        MoveWindow(s->no, std::max(s->S(22), cw - s->S(294)), ch - s->S(54), s->S(112), s->S(36), TRUE);
-        MoveWindow(s->yes, std::max(s->S(148), cw - s->S(168)), ch - s->S(54), s->S(146), s->S(36), TRUE);
-        return 0;
-    }
-    case WM_GETMINMAXINFO:
-        ((MINMAXINFO *)b)->ptMinTrackSize = {s->S(520), s->S(430)};
-        return 0;
-    case DM_GETDEFID:
-        return MAKELRESULT(IDCANCEL, DC_HASDEFID);
-    case DM_SETDEFID:
-        return 0;
-    case WM_COMMAND:
-        if (LOWORD(a) == IDOK || LOWORD(a) == IDCANCEL) {
-            s->answer = LOWORD(a) == IDOK;
-            s->done = true;
-            DestroyWindow(w);
-            return 0;
+// Match the published WPF wrap opportunities after filename separators, without
+// changing the actual path used by file APIs or the tooltip.
+std::wstring WrappedName(HDC dc, HFONT font, const std::wstring &name, int available) {
+    auto previous = SelectObject(dc, font);
+    std::wstring result;
+    size_t begin = 0;
+    while (begin < name.size()) {
+        size_t end = begin, separator = begin;
+        while (end < name.size()) {
+            SIZE extent{};
+            GetTextExtentPoint32W(dc, name.c_str() + begin, (int)(end - begin + 1), &extent);
+            if (extent.cx > available && end > begin)
+                break;
+            if (name[end] == L'_' || name[end] == L'-' || name[end] == L' ' || name[end] == L'\\')
+                separator = end + 1;
+            ++end;
         }
-        break;
-    case WM_CLOSE:
-        s->answer = false;
-        s->done = true;
-        DestroyWindow(w);
-        return 0;
-    case WM_CTLCOLORSTATIC:
-    case WM_CTLCOLOREDIT:
-        SetTextColor((HDC)a, Ink);
-        SetBkColor((HDC)a, RGB(255, 255, 255));
-        return (LRESULT)GetStockObject(WHITE_BRUSH);
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC dc = BeginPaint(w, &ps);
-        RECT r;
-        GetClientRect(w, &r);
-        Fill(dc, r, RGB(243, 246, 251));
-        Text(dc, s->bold, s->heading, {s->S(22), s->S(17), r.right - s->S(22), s->S(48)}, Ink);
-        Text(dc, s->font, s->message, {s->S(22), s->S(57), r.right - s->S(22), s->S(132)},
-             s->danger ? RGB(162, 58, 50) : Muted, DT_LEFT | DT_WORDBREAK);
-        Text(dc, s->font, s->hint, {s->S(22), r.bottom - s->S(78), r.right - s->S(22), r.bottom - s->S(58)},
-             Muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        EndPaint(w, &ps);
-        return 0;
+        if (end < name.size() && separator > begin)
+            end = separator;
+        if (end == begin)
+            ++end;
+        if (!result.empty())
+            result += L"\r\n";
+        result += name.substr(begin, end - begin);
+        begin = end;
     }
-    case WM_NCDESTROY:
-        DeleteObject(s->font);
-        DeleteObject(s->bold);
-        break;
-    }
-    return DefWindowProcW(w, m, a, b);
+    SelectObject(dc, previous);
+    return result;
 }
 bool Ask(HWND owner, const std::wstring &title, const std::wstring &message, const std::wstring &details,
          const std::wstring &primary = L"继续", const std::wstring &secondary = L"取消",
          bool danger = false) {
-    static bool registered = false;
-    if (!registered) {
-        WNDCLASSW wc{};
-        wc.lpfnWndProc = DialogProc;
-        wc.hInstance = GetModuleHandleW(nullptr);
-        wc.lpszClassName = L"Win11Usb.Native.Confirm";
-        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        RegisterClassW(&wc);
-        registered = true;
-    }
-    DialogState d;
-    auto getDpi = (UINT(WINAPI *)(HWND))GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
-    d.dpi = getDpi ? getDpi(owner) : 96;
-    d.heading = title;
-    d.message = message;
-    // EDIT controls require CRLF; preserve existing CRLF and normalize LF-only
-    // source/notice text so license paragraphs remain readable.
-    for (size_t i = 0; i < details.size(); i++) {
-        if (details[i] == L'\n' && (i == 0 || details[i - 1] != L'\r'))
-            d.details += L'\r';
-        d.details += details[i];
-    }
-    d.primary = primary;
-    d.secondary = secondary;
-    d.danger = danger;
-    d.hint = danger ? L"默认取消 · 请核对磁盘编号、名称和容量" : L"按 Esc 可返回；详细内容可滚动查看。";
-    RECT pr;
-    GetWindowRect(owner, &pr);
-    MONITORINFO monitor{sizeof monitor};
-    GetMonitorInfoW(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &monitor);
-    int width = std::min<int>(d.S(620), monitor.rcWork.right - monitor.rcWork.left);
-    int height = std::min<int>(d.S(535), monitor.rcWork.bottom - monitor.rcWork.top);
-    int left = std::max(monitor.rcWork.left,
-                        std::min(pr.left + (pr.right - pr.left - width) / 2, monitor.rcWork.right - width));
-    int top = std::max(monitor.rcWork.top, std::min(pr.top + d.S(40), monitor.rcWork.bottom - height));
-    HWND w = CreateWindowExW(WS_EX_DLGMODALFRAME, L"Win11Usb.Native.Confirm", title.c_str(),
-                             WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME, left, top, width, height,
-                             owner, nullptr, GetModuleHandleW(nullptr), &d);
-    if (!w)
-        throw Error(L"无法打开确认窗口：" + WinError());
-    SendMessageW(w, WM_SETICON, ICON_SMALL, SendMessageW(owner, WM_GETICON, ICON_SMALL, 0));
-    EnableWindow(owner, FALSE);
-    ShowWindow(w, SW_SHOW);
-    SetFocus(d.no);
-    MSG msg{};
-    while (!d.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
-            SendMessageW(w, WM_COMMAND, IDCANCEL, 0);
-            continue;
-        }
-        // Enter on the read-only details must never default to destructive approval.
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN && GetFocus() != d.yes) {
-            SendMessageW(w, WM_COMMAND, IDCANCEL, 0);
-            continue;
-        }
-        if (!IsDialogMessageW(w, &msg)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-    EnableWindow(owner, TRUE);
-    SetForegroundWindow(owner);
-    return d.answer;
+    return ShowProductDialog(owner, title, message, details, primary, secondary, danger);
 }
 struct PromptMessage {
     Prompt kind;
@@ -211,17 +116,25 @@ struct Ui {
     HINSTANCE instance;
     HWND window = nullptr, isoButton = nullptr, refresh = nullptr, combo = nullptr, fat = nullptr,
          ntfs = nullptr, start = nullptr, stopButton = nullptr, log = nullptr, exportButton = nullptr;
-    HFONT font = nullptr, small = nullptr, bold = nullptr, titleFont = nullptr;
+    HFONT font = nullptr, small = nullptr, bold = nullptr, titleFont = nullptr, labelFont = nullptr,
+          stageFont = nullptr, logFont = nullptr, numberFont = nullptr;
     HBRUSH bgBrush = nullptr, logBrush = nullptr;
-    int dpi = 96, width = 826, height = 760, logTop = 423;
-    bool sample = false, runningSample = false, empty = false, busy = false, scanning = false, closed = false,
-         finished = false, promptPreview = false, blockedPreview = false;
+    HWND tooltip = nullptr, hotButton = nullptr;
+    int dpi = 96, width = 824, height = 721, logTop = 423;
+    int isoHeight = 44, isoDivider = 100, diskTop = 119, diskHeight = 54, diskDivider = 217, fsTop = 235,
+        progressTop = 312;
+    std::wstring wrappedIso;
+    bool tooltipAdded = false, diskTooltipAdded = false;
+    std::wstring diskTooltip;
+    bool sample = false, runningSample = false, empty = false, busy = false, scanning = false,
+         closed = false, finished = false, promptPreview = false, blockedPreview = false;
     int selected = -1;
     Catalog catalog;
     std::wstring iso, isoName = L"选择 Windows ISO 镜像", isoDirectory = L"支持 .iso 文件",
                       diskNote = L"正在读取 USB 设备…", phase = L"准备就绪", percentText = L"0.0%",
                       fileText = L"等待开始制作", footer = L"只读检查不会修改 U 盘。", sessionLog;
     Progress progress;
+    Request activeRequest;
     UiUpdates updates;
     std::atomic<bool> cancel{false};
     Handle scanner, worker, sessionFile;
@@ -230,7 +143,7 @@ struct Ui {
     int S(int n) const { return MulDiv(n, dpi, 96); }
     RECT R(int l, int t, int r, int b) const { return {S(l), S(t), S(r), S(b)}; }
     void Fonts() {
-        for (auto f : {font, small, bold, titleFont})
+        for (auto f : {font, small, bold, titleFont, labelFont, stageFont, logFont, numberFont})
             if (f)
                 DeleteObject(f);
         auto make = [&](int px, int weight) {
@@ -238,13 +151,21 @@ struct Ui {
                                CLEARTYPE_QUALITY, 0, L"Microsoft YaHei UI");
         };
         font = make(14, FW_NORMAL);
-        small = make(12, FW_NORMAL);
+        small = make(13, FW_NORMAL);
         bold = make(14, FW_SEMIBOLD);
-        titleFont = make(16, FW_SEMIBOLD);
+        titleFont = make(15, FW_SEMIBOLD);
+        labelFont = make(15, FW_SEMIBOLD);
+        numberFont = make(16, FW_SEMIBOLD);
+        stageFont = make(11, FW_NORMAL);
+        logFont = CreateFontW(-S(13), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0,
+                              CLEARTYPE_QUALITY, 0, L"Consolas");
         for (HWND h : {isoButton, refresh, combo, fat, ntfs, start, stopButton, log, exportButton})
             if (h)
                 SendMessageW(h, WM_SETFONT, (WPARAM)font, TRUE);
+        if (log)
+            SendMessageW(log, WM_SETFONT, (WPARAM)logFont, TRUE);
     }
+    RECT ProgressRect() const { return R(22, progressTop - 15, width - 22, logTop - 1); }
     HWND Control(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
         return CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10, window,
                                (HMENU)(INT_PTR)id, instance, nullptr);
@@ -276,7 +197,8 @@ struct Ui {
                       visible.substr(cut == visible.npos ? visible.size() - 1000000 : cut + 1);
         }
         // Appending and moving the caret can otherwise paint the EDIT repeatedly.
-        // Resume and invalidate once after the complete batch, including its scrollbar.
+        // Resume and invalidate once after the complete batch, including its
+        // scrollbar.
         SendMessageW(log, WM_SETREDRAW, FALSE, 0);
         int len = GetWindowTextLengthW(log);
         if ((size_t)len + visible.size() > 1500000) {
@@ -316,7 +238,12 @@ struct Ui {
             t << std::fixed << std::setprecision(1) << std::max(0.0, progress.overall) << L"%";
             percentText = progress.overall < 0 ? L"…" : t.str();
             fileText = progress.file.empty() ? L"等待当前文件进度…" : L"当前文件：" + progress.file;
-            auto area = R(22, 326, width - 22, 422);
+            if (!progress.file.empty() && progress.current > 0) {
+                std::wostringstream current;
+                current << std::fixed << std::setprecision(1) << std::min(100.0, progress.current);
+                fileText += L" · " + current.str() + L"%";
+            }
+            auto area = ProgressRect();
             InvalidateRect(window, &area, FALSE);
         }
     }
@@ -328,29 +255,103 @@ struct Ui {
         return j >= 0 && j < (int)catalog.disks.size() ? &catalog.disks[j] : nullptr;
     }
     std::wstring Fs() { return SendMessageW(ntfs, BM_GETCHECK, 0, 0) == BST_CHECKED ? L"NTFS" : L"FAT32"; }
+    int TextHeight(HDC dc, HFONT f, const std::wstring &text, int available, int minimum = 0) {
+        RECT rect{0, 0, S(std::max(10, available)), 0};
+        auto previous = SelectObject(dc, f);
+        DrawTextW(dc, text.c_str(), (int)text.size(), &rect, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        SelectObject(dc, previous);
+        return std::max(minimum, MulDiv(rect.bottom, 96, dpi));
+    }
+    int DiskTextHeight(HDC dc, const Disk &disk, int available) {
+        return TextHeight(dc, bold, disk.friendly, available, 19) +
+               TextHeight(dc, small, disk.Metadata(), available, 17) + 21;
+    }
     void Layout() {
         RECT c;
         GetClientRect(window, &c);
         width = MulDiv(c.right, 96, dpi);
         height = MulDiv(c.bottom, 96, dpi);
-        int field = 176, right = width - 22;
+        int field = 176, right = width - 22, fieldWidth = right - 118 - field;
+        HDC dc = GetDC(window);
+        wrappedIso = WrappedName(dc, font, isoName, S(fieldWidth - 24));
+        isoHeight = TextHeight(dc, font, wrappedIso, fieldWidth - 24, 26) + 18;
+        int dirHeight = std::min(34, TextHeight(dc, small, isoDirectory, right - field, 17));
+        isoDivider = 18 + isoHeight + 5 + dirHeight + 18;
+        diskTop = isoDivider + 19;
+        diskHeight = 54;
+        if (auto disk = Selection())
+            diskHeight = DiskTextHeight(dc, *disk, fieldWidth - 46);
+        int count = (int)SendMessageW(combo, CB_GETCOUNT, 0, 0);
+        for (int i = 0; i < count; ++i) {
+            int j = (int)SendMessageW(combo, CB_GETITEMDATA, i, 0);
+            if (j >= 0 && j < (int)catalog.disks.size())
+                SendMessageW(combo, CB_SETITEMHEIGHT, i,
+                             S(DiskTextHeight(dc, catalog.disks[j], fieldWidth - 26)));
+        }
+        ReleaseDC(window, dc);
+        diskDivider = diskTop + diskHeight + 8 + 18 + (diskNote.empty() ? 0 : 24) + 18;
+        fsTop = diskDivider + 17;
+        bool wrapFs = right - field < 615;
+        // At narrow widths the NTFS option moves to its own line, as the published
+        // WrapPanel did.
+        int fsHeight = wrapFs ? 69 : 44;
+        progressTop = fsTop + fsHeight + 17 + 15;
+        logTop = progressTop + 104;
+        // A small work area can be shorter than even the expanded text. Preserve
+        // the fixed footer/log controls; the complete values remain in tooltips.
+        if (logTop > height - 145) {
+            int reduce = logTop - (height - 145);
+            int isoReduce = std::min(reduce, std::max(0, isoHeight - 44));
+            isoHeight -= isoReduce;
+            isoDivider -= isoReduce;
+            diskTop -= isoReduce;
+            reduce -= isoReduce;
+            int diskReduce = std::min(reduce, std::max(0, diskHeight - 54));
+            diskHeight -= diskReduce;
+            diskDivider -= isoReduce + diskReduce;
+            fsTop -= isoReduce + diskReduce;
+            progressTop -= isoReduce + diskReduce;
+            logTop -= isoReduce + diskReduce;
+        }
         auto mv = [&](HWND h, int x, int y, int w, int t) {
-            MoveWindow(h, S(x), S(y), S(std::max(10, w)), S(t), TRUE);
+            MoveWindow(h, S(x), S(y), S(std::max(10, w)), S(std::max(1, t)), TRUE);
         };
-        mv(isoButton, right - 106, 20, 106, 44);
-        // Height includes the list: 56px previously left almost no rows to open.
-        mv(combo, field, 132, right - 118 - field, 360);
-        SendMessageW(combo, CB_SETITEMHEIGHT, -1, S(48));
-        SendMessageW(combo, CB_SETITEMHEIGHT, 0, S(52));
-        mv(refresh, right - 106, 132, 106, 48);
-        int fsY = 249;
-        mv(fat, field, fsY, 206, 28);
-        mv(ntfs, field + 212, fsY, right - field - 212, 28);
-        logTop = 428;
-        mv(log, 34, logTop + 42, width - 68, std::max(105, height - logTop - 104));
-        mv(start, right - 112, height - 50, 112, 36);
-        mv(stopButton, right - 235, height - 50, 112, 36);
-        mv(exportButton, right - 235, height - 50, 112, 36);
+        mv(isoButton, right - 106, 18, 106, 44);
+        mv(combo, field, diskTop, fieldWidth, 360);
+        SendMessageW(combo, CB_SETITEMHEIGHT, -1, S(diskHeight - 6));
+        mv(refresh, right - 106, diskTop, 106, 44);
+        mv(fat, field, fsTop + 5, 206, 23);
+        mv(ntfs, wrapFs ? field : field + 212, fsTop + (wrapFs ? 30 : 5),
+           right - field - (wrapFs ? 0 : 212), 23);
+        mv(log, 36, logTop + 55, width - 72, std::max(20, height - logTop - 125));
+        bool diagnostic = false;
+#ifdef WIN11USB_READONLY
+        diagnostic = !busy && !sample;
+#endif
+        int stopWidth = busy ? 104 : diagnostic ? 124 : 0;
+        mv(start, right - 112 - stopWidth, height - 52, 112, 36);
+        mv(stopButton, right - 96, height - 52, 96, 36);
+        mv(exportButton, right - 112, height - 52, 112, 36);
+        if (tooltip) {
+            TOOLINFOW info{sizeof info};
+            info.hwnd = window;
+            info.uId = 1;
+            info.uFlags = TTF_SUBCLASS;
+            info.rect = R(field, 18, right - 118, 18 + isoHeight);
+            info.lpszText = const_cast<wchar_t *>(iso.empty() ? L"支持 .iso 文件" : iso.c_str());
+            SendMessageW(tooltip, tooltipAdded ? TTM_UPDATETIPTEXTW : TTM_ADDTOOLW, 0, (LPARAM)&info);
+            SendMessageW(tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&info);
+            tooltipAdded = true;
+            diskTooltip =
+                Selection() ? Selection()->friendly + L"\r\n" + Selection()->Metadata() : diskNote;
+            info.uId = 2;
+            info.uFlags = TTF_SUBCLASS | TTF_IDISHWND;
+            info.hwnd = window;
+            info.uId = (UINT_PTR)combo;
+            info.lpszText = const_cast<wchar_t *>(diskTooltip.c_str());
+            SendMessageW(tooltip, diskTooltipAdded ? TTM_UPDATETIPTEXTW : TTM_ADDTOOLW, 0, (LPARAM)&info);
+            diskTooltipAdded = true;
+        }
         InvalidateRect(window, nullptr, FALSE);
     }
     void State() {
@@ -364,10 +365,14 @@ struct Ui {
 #endif
         EnableWindow(start, can && ((sample && !empty) || selectionReady));
         EnableWindow(exportButton, !scanning);
-        ShowWindow(exportButton, busy ? SW_HIDE : SW_SHOW);
+#ifdef WIN11USB_READONLY
+        ShowWindow(exportButton, busy || sample ? SW_HIDE : SW_SHOW);
+#else
+        ShowWindow(exportButton, SW_HIDE);
+#endif
         ShowWindow(stopButton, busy ? SW_SHOW : SW_HIDE);
         SetWindowTextW(start, busy     ? L"制作中…"
-                              : sample ? L"预览制作状态"
+                              : sample ? L"预览状态"
                                        :
 #ifdef WIN11USB_READONLY
                                        L"只读检查"
@@ -375,7 +380,7 @@ struct Ui {
                                        L"开始制作"
 #endif
         );
-        InvalidateRect(window, nullptr, FALSE);
+        Layout();
     }
     void ApplyCatalog(Catalog c) {
         std::wstring selectedPath;
@@ -427,7 +432,7 @@ struct Ui {
         dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
         if (!GetSaveFileNameW(&dialog))
             return;
-        std::wstring report = L"Win11Usb 0.2.0-preview.11 — 设备识别诊断\r\n";
+        std::wstring report = L"Win11Usb 0.2.0-preview.13 — 设备识别诊断\r\n";
         report += sample ? L"注意：这是预览示例数据，不能作为实机检测结果。\r\n"
                          : L"导出操作仅保存本次刷新所读信息，不执行清盘或格式化。\r\n";
         report += L"未收集原始序列号、PnP 实例 ID 或安装 ISO 内容。\r\n\r\n" + DiskJson(catalog) +
@@ -486,10 +491,12 @@ struct Ui {
             c.disks.push_back(d);
         ApplyCatalog(c);
         if (!empty) {
-            iso = L"D:\\Windows ISO\\zh-cn_windows_11_business_editions_version_26h2_x64_dvd_74d48a06.iso";
+            iso = L"D:\\Windows "
+                  L"ISO\\zh-cn_windows_11_business_editions_version_26h2_x64_dvd_"
+                  L"74d48a06.iso";
             isoName = BaseName(iso);
             isoDirectory = Parent(iso);
-            diskNote = L"示例设备。预览模式不会读取或修改磁盘。";
+            diskNote.clear();
         }
         footer = L"界面预览模式：不会挂载 ISO，也不会修改磁盘。";
         State();
@@ -531,7 +538,8 @@ struct Ui {
         if (sample) {
             if (blockedPreview) {
                 Ask(window, L"USB 只读信息 · 示例",
-                    L"这是界面预览，不会操作磁盘。部分查询失败的 USB 也应显示在只读列表中。",
+                    L"这是界面预览，不会操作磁盘。部分查询失败的 USB "
+                    L"也应显示在只读列表中。",
                     DiskJson(catalog), L"确定", L"返回");
                 return;
             }
@@ -553,8 +561,8 @@ struct Ui {
                                      : L"该设备目前不能用于制作：" + d->blocked + L"\r\n";
             for (const auto &error : d->probeErrors)
                 details += error + L"\r\n";
-            details +=
-                L"\r\n信息来自最近一次刷新。可用“导出诊断”保存报告。\r\n.NET / PowerShell / WMI：不需要。";
+            details += L"\r\n信息来自最近一次刷新。可用“导出诊断”保存报告。\r\n.NET "
+                       L"/ PowerShell / WMI：不需要。";
             Ask(window, L"USB 设备只读信息",
                 L"本版本只读取设备信息，不会挂载 ISO、清盘、格式化或复制安装文件。", details, L"确定",
                 L"返回");
@@ -566,11 +574,8 @@ struct Ui {
         if (iso.empty())
             return;
         Request request{iso, Fs(), ExePath(), *d};
-        if (!Ask(window, L"先检查本次制作目标",
-                 L"将自动挂载并识别 ISO。清盘前还会单独显示整盘确认，默认取消。",
-                 L"安装镜像\r\n" + iso + L"\r\n\r\n写入 U 盘\r\n" + d->friendly + L"\r\n" + d->Metadata() +
-                     L"\r\n\r\n文件系统：" + Fs(),
-                 L"继续检查", L"返回检查"))
+        activeRequest = request;
+        if (!ShowProductDialog(window, StartDialog(request)))
             return;
         cancel = false;
         busy = true;
@@ -649,9 +654,7 @@ struct Ui {
                 DestroyWindow(window);
             return;
         }
-        if (!Ask(window, L"结束当前制作？",
-                 L"结束不能回滚格式化或复制。U 盘可能需要重新制作，ISO 可能保留挂载。",
-                 L"只会结束本程序及其启动的命令，不会结束其他应用。", L"结束并退出", L"继续等待", true))
+        if (!ShowProductDialog(window, StopDialog(close)))
             return;
         cancel = true;
         FlushUpdates();
@@ -666,49 +669,119 @@ struct Ui {
             WaitForSingleObject(worker, 2000);
         ExitProcess(2);
     }
-    void Icon(HDC dc, int type, int x, int y, COLORREF color = Blue) {
-        auto pen = CreatePen(PS_SOLID, S(2), color);
-        auto op = SelectObject(dc, pen), ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        auto ln = [&](int x1, int y1, int x2, int y2) {
-            MoveToEx(dc, S(x + x1), S(y + y1), nullptr);
-            LineTo(dc, S(x + x2), S(y + y2));
-        };
-        if (type == 0) {
-            Rectangle(dc, S(x + 5), S(y + 2), S(x + 23), S(y + 29));
-            ln(16, 2, 23, 9);
-            ln(16, 2, 16, 9);
-            ln(16, 9, 23, 9);
-            Ellipse(dc, S(x + 16), S(y + 18), S(x + 31), S(y + 33));
-            ln(23, 21, 23, 29);
-            ln(19, 25, 27, 25);
-        } else if (type == 1) {
-            RoundRect(dc, S(x + 8), S(y + 10), S(x + 25), S(y + 32), S(7), S(7));
-            Rectangle(dc, S(x + 11), S(y + 2), S(x + 22), S(y + 12));
-            ln(15, 4, 15, 7);
-            ln(19, 4, 19, 7);
-            Ellipse(dc, S(x + 14), S(y + 22), S(x + 19), S(y + 27));
-        } else if (type == 2) {
-            POINT pts[24];
-            for (int i = 0; i < 24; i++) {
-                double a = i * 3.141592653589793 / 12, r = i % 3 == 0 ? 15 : 12;
-                pts[i] = {S(x + 17 + (int)(std::cos(a) * r)), S(y + 17 + (int)(std::sin(a) * r))};
-            }
-            Polygon(dc, pts, 24);
-            Ellipse(dc, S(x + 11), S(y + 11), S(x + 23), S(y + 23));
-        } else if (type == 3) {
-            for (int i = 0; i < 3; i++) {
-                ln(3, 5 + i * 8, 5, 5 + i * 8);
-                ln(10, 5 + i * 8, 29, 5 + i * 8);
-            }
+    void DrawDiskFace(HDC dc, RECT rect) {
+        Fill(dc, rect, Bg);
+        bool enabled = IsWindowEnabled(combo) != FALSE;
+        Rounded(dc, rect, enabled ? RGB(247, 250, 255) : RGB(245, 247, 250),
+                GetFocus() == combo ? RGB(77, 130, 223) : RGB(203, 215, 231), S(6));
+        RECT text = rect;
+        text.left += S(12);
+        text.right -= S(34);
+        text.top += S(8);
+        if (auto disk = Selection()) {
+            HDC measure = GetDC(window);
+            int first =
+                TextHeight(measure, bold, disk->friendly, MulDiv(text.right - text.left, 96, dpi), 19);
+            ReleaseDC(window, measure);
+            RECT name = text;
+            name.bottom = name.top + S(first);
+            Text(dc, bold, disk->friendly, name, enabled ? Ink : Muted,
+                 DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+            text.top = name.bottom + S(3);
+            text.bottom = rect.bottom - S(7);
+            Text(dc, small, disk->Metadata(), text, RGB(82, 103, 130),
+                 DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
         } else {
-            Rectangle(dc, S(x + 1), S(y + 2), S(x + 23), S(y + 22));
-            ln(5, 7, 10, 12);
-            ln(10, 12, 5, 17);
-            ln(13, 17, 19, 17);
+            text = rect;
+            text.left += S(12);
+            text.right -= S(34);
+            Text(dc, font, scanning ? L"正在读取 USB 设备…" : L"连接 U 盘后选择设备", text,
+                 RGB(118, 133, 154));
         }
-        SelectObject(dc, op);
-        SelectObject(dc, ob);
-        DeleteObject(pen);
+        DrawProductIcon(
+            dc, ProductIcon::Chevron,
+            {rect.right - S(28), (rect.bottom - S(16)) / 2, rect.right - S(12), (rect.bottom + S(16)) / 2},
+            RGB(118, 133, 154));
+    }
+    void DrawRadio(HDC dc, HWND control, RECT rect) {
+        Fill(dc, rect, Bg);
+        bool enabled = IsWindowEnabled(control) != FALSE;
+        bool checked = SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        int cy = (rect.top + rect.bottom) / 2, size = S(12), left = S(1);
+        Gdiplus::Graphics g(dc);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        auto color = [&](COLORREF c) {
+            return Gdiplus::Color(255, GetRValue(c), GetGValue(c), GetBValue(c));
+        };
+        Gdiplus::Pen pen(color(enabled && checked ? Blue : RGB(139, 150, 166)), 1.0f);
+        Gdiplus::SolidBrush white(color(Bg));
+        g.FillEllipse(&white, (float)left, (float)(cy - size / 2), (float)size, (float)size);
+        g.DrawEllipse(&pen, (float)left + .5f, (float)(cy - size / 2) + .5f, (float)size - 1,
+                      (float)size - 1);
+        if (checked) {
+            Gdiplus::SolidBrush dot(color(enabled ? Blue : RGB(150, 161, 179)));
+            g.FillEllipse(&dot, (float)(left + S(3)), (float)(cy - size / 2 + S(3)), (float)(size - S(6)),
+                          (float)(size - S(6)));
+        }
+        wchar_t text[160]{};
+        GetWindowTextW(control, text, 160);
+        rect.left = S(20);
+        Text(dc, font, text, rect, enabled ? Ink : RGB(150, 157, 169));
+        if (GetFocus() == control) {
+            InflateRect(&rect, -1, -2);
+            DrawFocusRect(dc, &rect);
+        }
+    }
+    static LRESULT CALLBACK SurfaceProc(HWND control, UINT message, WPARAM a, LPARAM b, UINT_PTR,
+                                        DWORD_PTR data) {
+        auto u = (Ui *)data;
+        int id = GetDlgCtrlID(control);
+        if (message == WM_PAINT && (id == ID_DISK || id == ID_FAT || id == ID_NTFS)) {
+            PAINTSTRUCT ps;
+            HDC dest = BeginPaint(control, &ps);
+            RECT rect;
+            GetClientRect(control, &rect);
+            HDC dc = CreateCompatibleDC(dest);
+            auto bitmap = CreateCompatibleBitmap(dest, rect.right, rect.bottom);
+            auto previous = SelectObject(dc, bitmap);
+            if (id == ID_DISK)
+                u->DrawDiskFace(dc, rect);
+            else
+                u->DrawRadio(dc, control, rect);
+            BitBlt(dest, 0, 0, rect.right, rect.bottom, dc, 0, 0, SRCCOPY);
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            EndPaint(control, &ps);
+            return 0;
+        }
+        if (message == WM_ERASEBKGND)
+            return 1;
+        if (id == ID_DISK && message == WM_NCPAINT)
+            return 0;
+        if (message == WM_SETFOCUS || message == WM_KILLFOCUS || message == WM_ENABLE ||
+            message == BM_SETCHECK) {
+            auto result = DefSubclassProc(control, message, a, b);
+            InvalidateRect(control, nullptr, FALSE);
+            return result;
+        }
+        if (message == WM_MOUSEMOVE && id != ID_DISK) {
+            if (u->hotButton != control) {
+                u->hotButton = control;
+                TRACKMOUSEEVENT tracking{sizeof tracking, TME_LEAVE, control, 0};
+                TrackMouseEvent(&tracking);
+                InvalidateRect(control, nullptr, FALSE);
+            }
+        }
+        if (message == WM_MOUSELEAVE && u->hotButton == control) {
+            u->hotButton = nullptr;
+            InvalidateRect(control, nullptr, FALSE);
+        }
+        if (message == WM_SETCURSOR && IsWindowEnabled(control)) {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        return DefSubclassProc(control, message, a, b);
     }
     void Paint() {
         PAINTSTRUCT ps;
@@ -720,97 +793,112 @@ struct Ui {
         auto old = SelectObject(dc, bitmap);
         Fill(dc, cr, Bg);
         int right = width - 22, field = 176;
-        for (int y : {114, 230, 311})
-            Fill(dc, R(22, y, right, y + 1), Line);
-        for (auto xy : std::vector<std::pair<int, int>>{{22, 23}, {22, 132}, {22, 248}})
-            Rounded(dc, R(xy.first, xy.second, xy.first + 50, xy.second + 50), RGB(232, 240, 254),
-                    RGB(232, 240, 254), S(12));
-        Icon(dc, 0, 31, 30);
-        Icon(dc, 1, 30, 140);
-        Icon(dc, 2, 29, 254);
-        Text(dc, bold, L"安装镜像", R(88, 30, 168, 66), Ink);
-        Text(dc, bold, L"写入U盘", R(88, 142, 168, 176), Ink);
-        Text(dc, bold, L"文件系统", R(88, 250, 168, 288), Ink);
-        Rounded(dc, R(field, 20, right - 118, 77), RGB(248, 250, 253), RGB(203, 215, 231), S(6));
-        Text(dc, font, isoName, R(field + 12, 27, right - 130, 74), iso.empty() ? Muted : Ink,
-             DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
-        Text(dc, small, isoDirectory, R(field, 81, right, 108), Muted,
-             DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
-        if (!Selection())
-            Text(dc, font, scanning ? L"正在读取 USB 设备…" : L"连接 U 盘后选择设备",
-                 R(field + 12, 144, right - 150, 176), Muted);
+        Fill(dc, R(22, isoDivider, right, isoDivider + 1), Line);
+        Fill(dc, R(22, diskDivider, right, diskDivider + 1), Line);
+        Fill(dc, R(22, progressTop - 15, right, progressTop - 14), Line);
+        Rounded(dc, R(22, 21, 72, 71), RGB(232, 240, 254), RGB(232, 240, 254), S(11));
+        Rounded(dc, R(22, diskTop, 72, diskTop + 50), RGB(232, 240, 254), RGB(232, 240, 254), S(11));
+        Rounded(dc, R(22, fsTop, 66, fsTop + 44), RGB(237, 244, 255), RGB(237, 244, 255), S(10));
+        DrawProductIcon(dc, ProductIcon::Iso, R(32, 30, 61, 61), Blue);
+        DrawProductIcon(dc, ProductIcon::Usb, R(35, diskTop + 13, 59, diskTop + 37), Blue, -45);
+        DrawProductIcon(dc, ProductIcon::Settings, R(30, fsTop + 8, 57, fsTop + 35), Blue);
+        Text(dc, labelFont, L"安装镜像", R(88, 18, 168, 18 + isoHeight + 22), Ink);
+        Text(dc, labelFont, L"写入U盘", R(88, diskTop, 168, diskTop + diskHeight), Ink);
+        Text(dc, labelFont, L"文件系统", R(88, fsTop + 6, 168, fsTop + 30), Ink);
+        Rounded(dc, R(field, 18, right - 118, 18 + isoHeight), RGB(248, 250, 253), RGB(203, 215, 231),
+                S(6));
+        Text(dc, font, wrappedIso, R(field + 12, 27, right - 130, 18 + isoHeight - 7),
+             iso.empty() ? RGB(118, 133, 154) : Ink, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+        Text(dc, small, isoDirectory, R(field, 18 + isoHeight + 5, right, isoDivider - 12), Muted,
+             DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
         auto disk = Selection();
-        std::wstring warning =
-            disk ? L"△ 制作将清除磁盘 " + std::to_wstring(disk->number) + L" 的全部分区和文件。"
-                 : L"△ 制作将清除所选 U 盘的全部分区和文件。";
-        Text(dc, small, warning, R(field, 191, right, 211), RGB(156, 87, 13));
+        auto warning = disk ? L"制作将清除磁盘 " + std::to_wstring(disk->number) + L" 的全部分区和文件。"
+                            : L"制作将清除所选 U 盘的全部分区和文件。";
+        int warningY = diskTop + diskHeight + 8;
+        DrawProductIcon(dc, ProductIcon::Warning, R(field, warningY + 1, field + 15, warningY + 16),
+                        RGB(217, 119, 6));
+        Text(dc, small, warning, R(field + 21, warningY, right, warningY + 18), RGB(156, 87, 13));
         if (!diskNote.empty())
-            Text(dc, small, diskNote, R(field, 211, right, 229), Muted,
-                 DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        Text(dc, small, L"install.wim 超过 4 GiB 时按相同规则拆分", R(field, 280, right, 303), Muted);
-        Icon(dc, 3, 22, 328);
-        Text(dc, titleFont, phase, R(54, 326, right - 180, 352), Ink);
+            Text(dc, small, diskNote, R(field, warningY + 24, right, diskDivider - 12), Muted,
+                 DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        bool wrapFs = right - field < 615;
+        Text(dc, small, L"install.wim 超过 4 GiB 时按相同规则拆分",
+             R(field, fsTop + (wrapFs ? 56 : 31), right, fsTop + (wrapFs ? 76 : 51)), Muted);
+        DrawProductIcon(dc, ProductIcon::Stage, R(22, progressTop, 44, progressTop + 22), Blue);
+        Text(dc, titleFont, phase, R(54, progressTop, right - 180, progressTop + 24), Ink,
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         Text(dc, small,
              busy && progress.stage == 4   ? L"复制整体"
              : busy && progress.stage == 5 ? L"校验整体"
              : finished                    ? L"制作结果"
                                            : L"当前操作",
-             R(right - 178, 327, right - 65, 352), Muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-        Text(dc, titleFont, finished ? L"已完成" : percentText, R(right - 70, 327, right, 352), Blue,
+             R(right - 178, progressTop, right - 65, progressTop + 24), RGB(82, 103, 130),
+             DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, numberFont, finished ? L"已完成" : percentText,
+             R(right - 70, progressTop, right, progressTop + 24), Blue,
              DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         const wchar_t *stages[] = {L"检查镜像", L"格式化", L"处理映像", L"复制文件", L"校验", L"清理"};
-        int step = (right - 35 - 22) / 5;
-        for (int i = 0; i < 6; i++) {
-            int x = 22 + i * step;
-            bool done = finished || (progress.stage > i + 1), active = progress.stage == i + 1;
-            COLORREF c = done || active ? RGB(40, 120, 240) : RGB(220, 228, 239);
-            HBRUSH b = CreateSolidBrush(c);
-            auto ob = SelectObject(dc, b);
-            auto op = SelectObject(dc, GetStockObject(NULL_PEN));
-            Ellipse(dc, S(x), S(366), S(x + 10), S(376));
-            SelectObject(dc, op);
-            SelectObject(dc, ob);
-            DeleteObject(b);
-            if (done) {
-                auto check = CreatePen(PS_SOLID, S(1), RGB(255, 255, 255));
-                op = SelectObject(dc, check);
-                MoveToEx(dc, S(x + 2), S(371), nullptr);
-                LineTo(dc, S(x + 4), S(373));
-                LineTo(dc, S(x + 8), S(369));
-                SelectObject(dc, op);
-                DeleteObject(check);
+        // Widths follow the original equal star columns plus the final automatic
+        // label.
+        int step = (right - 22 - 40) / 5;
+        for (int i = 0; i < 6; ++i) {
+            int x = 22 + i * step, y = progressTop + 30;
+            bool done = finished || progress.stage > i + 1, active = progress.stage == i + 1;
+            auto icon = done     ? ProductIcon::StepDone
+                        : active ? ProductIcon::StepCurrent
+                                 : ProductIcon::StepPending;
+            DrawProductIcon(dc, icon, R(x, y + 5, x + 10, y + 15),
+                            done || active ? RGB(40, 120, 240) : RGB(220, 228, 239));
+            Text(dc, stageFont, stages[i], R(x + 15, y, std::min(x + 82, right), y + 20),
+                 active ? Blue : Muted);
+            if (i < 5) {
+                HDC measure = GetDC(window);
+                auto f = SelectObject(measure, stageFont);
+                SIZE extent{};
+                GetTextExtentPoint32W(measure, stages[i], (int)wcslen(stages[i]), &extent);
+                SelectObject(measure, f);
+                ReleaseDC(window, measure);
+                int linkStart = x + 15 + MulDiv(extent.cx, 96, dpi) + 8;
+                Fill(dc, R(linkStart, y + 10, x + step - 8, y + 11), done ? RGB(155, 186, 237) : Line);
             }
-            Text(dc, small, stages[i], R(x + 15, 360, std::min(x + 86, right), 381), active ? Blue : Muted);
-            if (i < 5)
-                Fill(dc, R(x + 88, 370, x + step - 8, 371), done ? RGB(155, 186, 237) : Line);
         }
-        Fill(dc, R(22, 386, right, 391), RGB(225, 233, 245));
-        double value = std::max(0.0, std::min(100.0, progress.overall));
-        if (finished)
-            value = 100;
-        Fill(dc, R(22, 386, 22 + (int)((right - 22) * value / 100), 391), Blue);
-        Text(dc, small, fileText, R(22, 395, right - 100, 416), Muted,
-             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        int barY = progressTop + 55;
+        Fill(dc, R(22, barY, right, barY + 4), RGB(226, 233, 244));
+        double value = finished ? 100 : std::clamp(progress.overall, 0.0, 100.0);
+        Fill(dc, R(22, barY, 22 + (int)((right - 22) * value / 100), barY + 4), RGB(40, 120, 240));
+        int fileY = progressTop + 67;
+        Text(dc, small, fileText, R(22, fileY, right - 100, fileY + 18), RGB(82, 103, 130),
+             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         if (progress.elapsed) {
-            wchar_t b[32];
-            swprintf(b, 32, L"用时 %02llu:%02llu", progress.elapsed / 60, progress.elapsed % 60);
-            Text(dc, small, b, R(right - 100, 395, right, 416), Muted, DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+            wchar_t elapsed[40];
+            swprintf(elapsed, 40, L"用时 %02llu:%02llu", progress.elapsed / 60, progress.elapsed % 60);
+            Text(dc, small, elapsed, R(right - 100, fileY, right, fileY + 18), Muted,
+                 DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
         }
-        Fill(dc, R(22, 419, right, 421), Line);
+        Fill(dc, R(22, progressTop + 90, right, progressTop + 92), RGB(229, 235, 245));
         if (progress.current > 0)
-            Fill(dc, R(22, 419, 22 + (int)((right - 22) * std::min(100.0, progress.current) / 100), 421),
-                 RGB(102, 156, 247));
-        Rounded(dc, R(22, logTop, right, height - 65), LogBg, LogBg, S(9));
-        Icon(dc, 4, 35, logTop + 12, RGB(124, 179, 255));
-        Text(dc, bold, L"制作日志", R(64, logTop + 9, right - 100, logTop + 35), RGB(229, 240, 255));
+            Fill(dc,
+                 R(22, progressTop + 90, 22 + (int)((right - 22) * std::min(100.0, progress.current) / 100),
+                   progressTop + 92),
+                 RGB(123, 167, 255));
+        Rounded(dc, R(22, logTop, right, height - 66), LogBg, LogBg, S(8));
+        DrawProductIcon(dc, ProductIcon::Log, R(36, logTop + 12, 57, logTop + 33), RGB(127, 178, 255));
+        Text(dc, bold, L"制作日志", R(65, logTop + 12, right - 100, logTop + 33), RGB(231, 239, 250));
         Text(dc, small,
              busy       ? L"制作中"
              : finished ? L"已结束"
                         : L"等待开始",
-             R(right - 90, logTop + 9, right - 15, logTop + 35), RGB(207, 224, 251),
+             R(right - 90, logTop + 12, right - 14, logTop + 33), RGB(175, 192, 216),
              DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-        Text(dc, small, footer, R(22, height - 52, right - 250, height - 11), Muted,
-             DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+        Fill(dc, R(36, logTop + 43, right - 14, logTop + 44), RGB(48, 64, 85));
+        int buttons = busy ? 224 : 112;
+#ifdef WIN11USB_READONLY
+        if (!busy && !sample)
+            buttons = 236;
+#endif
+        DrawProductIcon(dc, ProductIcon::Info, R(22, height - 42, 37, height - 27), RGB(118, 139, 170));
+        Text(dc, small, footer, R(44, height - 55, right - buttons - 12, height - 13), Muted,
+             DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
         BitBlt(dest, ps.rcPaint.left, ps.rcPaint.top, ps.rcPaint.right - ps.rcPaint.left,
                ps.rcPaint.bottom - ps.rcPaint.top, dc, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
         SelectObject(dc, old);
@@ -820,19 +908,43 @@ struct Ui {
     }
     void DrawButton(const DRAWITEMSTRUCT &d) {
         RECT r = d.rcItem;
-        bool primary = d.CtlID == ID_START, disabled = (d.itemState & ODS_DISABLED) != 0;
-        COLORREF bg = primary ? (disabled ? RGB(157, 185, 234) : RGB(37, 99, 235)) : RGB(237, 243, 253);
-        Rounded(d.hDC, r, bg, (d.itemState & ODS_FOCUS) ? Blue : bg, S(7));
-        wchar_t text[128];
-        GetWindowTextW(d.hwndItem, text, 128);
-        Text(d.hDC, bold, text, r,
-             primary    ? RGB(255, 255, 255)
-             : disabled ? Muted
-                        : RGB(36, 86, 165),
-             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        Fill(d.hDC, r, Bg);
+        bool primary = d.CtlID == ID_START, stop = d.CtlID == ID_STOP, refreshing = d.CtlID == ID_REFRESH;
+        bool disabled = (d.itemState & ODS_DISABLED) != 0, hot = hotButton == d.hwndItem;
+        COLORREF bg = primary      ? (disabled ? RGB(157, 185, 234)
+                                      : hot    ? RGB(58, 114, 239)
+                                               : RGB(37, 99, 235))
+                      : stop       ? RGB(255, 255, 255)
+                      : refreshing ? Bg
+                      : hot        ? RGB(242, 247, 255)
+                                   : RGB(237, 243, 253);
+        COLORREF border = primary ? bg : stop ? RGB(231, 141, 137) : refreshing ? Bg : RGB(215, 227, 244);
+        if (d.itemState & ODS_FOCUS)
+            border = Blue;
+        Rounded(d.hDC, r, bg, border, S(6));
+        wchar_t text[160]{};
+        GetWindowTextW(d.hwndItem, text, 160);
+        COLORREF ink = primary    ? RGB(255, 255, 255)
+                       : disabled ? RGB(143, 158, 180)
+                       : stop     ? RGB(191, 52, 48)
+                                  : RGB(36, 86, 165);
+        if (primary || refreshing) {
+            auto previous = SelectObject(d.hDC, bold);
+            SIZE extent{};
+            GetTextExtentPoint32W(d.hDC, text, (int)wcslen(text), &extent);
+            SelectObject(d.hDC, previous);
+            int icon = S(primary ? 15 : 21), gap = S(7), left = (r.right - extent.cx - icon - gap) / 2,
+                top = (r.bottom - icon) / 2;
+            DrawProductIcon(d.hDC, primary ? ProductIcon::Play : ProductIcon::Refresh,
+                            {left, top, left + icon, top + icon}, ink);
+            r.left = left + icon + gap;
+            Text(d.hDC, bold, text, r, ink);
+        } else
+            Text(d.hDC, bold, text, r, ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         if (d.itemState & ODS_FOCUS) {
-            InflateRect(&r, -3, -3);
-            DrawFocusRect(d.hDC, &r);
+            RECT focus = d.rcItem;
+            InflateRect(&focus, -S(3), -S(3));
+            DrawFocusRect(d.hDC, &focus);
         }
     }
     LRESULT Message(UINT m, WPARAM a, LPARAM b) {
@@ -841,31 +953,39 @@ struct Ui {
             HMENU systemMenu = GetSystemMenu(window, FALSE);
             AppendMenuW(systemMenu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(systemMenu, MF_STRING, 0x1ff0, L"关于 Win11Usb / 许可证");
+            AppendMenuW(systemMenu, MF_STRING, 0x1fe0, L"导出设备诊断…");
             bgBrush = CreateSolidBrush(Bg);
             logBrush = CreateSolidBrush(LogBg);
             isoButton = Control(L"BUTTON", L"选择 ISO…", WS_TABSTOP | BS_OWNERDRAW, ID_ISO);
-            refresh = Control(L"BUTTON", L"⟳ 刷新", WS_TABSTOP | BS_OWNERDRAW, ID_REFRESH);
-            combo = Control(WC_COMBOBOXW, L"",
-                            WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS,
-                            ID_DISK);
-            fat = Control(L"BUTTON", L"FAT32（UEFI 兼容性更广）", WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
-                          ID_FAT);
+            refresh = Control(L"BUTTON", L"刷新", WS_TABSTOP | BS_OWNERDRAW, ID_REFRESH);
+            combo =
+                Control(WC_COMBOBOXW, L"",
+                        WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_OWNERDRAWVARIABLE | CBS_HASSTRINGS,
+                        ID_DISK);
+            fat = Control(L"BUTTON", L"FAT32（UEFI 兼容性更广）",
+                          WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON, ID_FAT);
             ntfs = Control(L"BUTTON", L"NTFS（部分 UEFI 固件可能不支持启动）",
                            WS_TABSTOP | BS_AUTORADIOBUTTON, ID_NTFS);
             SendMessageW(fat, BM_SETCHECK, BST_CHECKED, 0);
-            start = Control(L"BUTTON", L"开始制作", WS_TABSTOP | BS_OWNERDRAW, ID_START);
+            start = Control(L"BUTTON", L"开始制作", WS_TABSTOP | WS_GROUP | BS_OWNERDRAW, ID_START);
             stopButton = Control(L"BUTTON", L"强制结束", WS_TABSTOP | BS_OWNERDRAW, ID_STOP);
             exportButton = Control(L"BUTTON", L"导出诊断", WS_TABSTOP | BS_OWNERDRAW, ID_EXPORT);
-            log = Control(L"EDIT", L"", WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                          ID_LOG);
+            log = Control(L"EDIT", L"",
+                          WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, ID_LOG);
             SendMessageW(log, EM_SETLIMITTEXT, 2 * 1024 * 1024, 0);
+            for (HWND control : {isoButton, refresh, combo, fat, ntfs, start, stopButton, exportButton})
+                SetWindowSubclass(control, SurfaceProc, 1, (DWORD_PTR)this);
+            tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                                      WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, window, nullptr,
+                                      instance, nullptr);
+            SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, 0, S(600));
             Fonts();
-            Log(L"C++ / Win32 原生版本：不加载 .NET、PowerShell 或 WMI。");
 #ifdef WIN11USB_READONLY
             Log(L"只读验证版：不挂载 ISO，不清盘，不格式化，不复制。");
             footer = L"只读版本：仅检查文件和 USB 整盘身份。";
 #else
-            footer = L"制作前会再次校对设备身份，并单独确认整盘格式化。";
+            footer = L"清盘前会再次核对磁盘并单独确认。";
+            Log(L"等待开始制作。操作日志将在这里实时显示。");
 #endif
             Layout();
             if (sample)
@@ -879,7 +999,10 @@ struct Ui {
             return 0;
         case WM_GETMINMAXINFO: {
             auto p = (MINMAXINFO *)b;
-            p->ptMinTrackSize = {S(760), S(620)};
+            MONITORINFO monitor{sizeof monitor};
+            GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor);
+            p->ptMinTrackSize = {S(720),
+                                 std::min(S(650), (int)(monitor.rcWork.bottom - monitor.rcWork.top))};
             return 0;
         }
         case WM_DPICHANGED: {
@@ -913,21 +1036,24 @@ struct Ui {
                 return TRUE;
             }
             if (d->CtlType == ODT_COMBOBOX) {
-                Fill(d->hDC, d->rcItem,
-                     (d->itemState & ODS_SELECTED) ? RGB(232, 240, 254) : RGB(248, 250, 253));
+                Fill(d->hDC, d->rcItem, RGB(255, 255, 255));
+                if (d->itemState & ODS_SELECTED)
+                    Rounded(d->hDC, d->rcItem, RGB(232, 240, 254), RGB(232, 240, 254), S(4));
                 if (d->itemID != (UINT)-1) {
                     int j = (int)d->itemData;
                     if (j >= 0 && j < (int)catalog.disks.size()) {
                         auto disk = catalog.disks[j];
                         RECT r = d->rcItem;
                         r.left += S(10);
-                        r.top += S(3);
-                        r.bottom = r.top + S(24);
-                        Text(d->hDC, bold, disk.friendly, r, Ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-                        r.top += S(23);
-                        r.bottom = r.top + S(21);
+                        r.right -= S(10);
+                        r.top += S(8);
+                        r.bottom = r.top + S(TextHeight(d->hDC, bold, disk.friendly,
+                                                        MulDiv(r.right - r.left, 96, dpi), 19));
+                        Text(d->hDC, bold, disk.friendly, r, Ink, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+                        r.top = r.bottom + S(3);
+                        r.bottom = d->rcItem.bottom - S(7);
                         Text(d->hDC, small, disk.Metadata(), r, Muted,
-                             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+                             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
                     }
                 } else {
                     RECT r = d->rcItem;
@@ -956,6 +1082,8 @@ struct Ui {
                 Stop(false);
                 break;
             case ID_DISK:
+                if (HIWORD(a) != CBN_SELCHANGE && HIWORD(a) != CBN_CLOSEUP)
+                    break;
                 if (auto selected = Selection())
                     diskNote = selected->eligible() ? L"" : selected->blocked;
                 State();
@@ -965,7 +1093,8 @@ struct Ui {
                 break;
             case ID_FAT:
             case ID_NTFS:
-                InvalidateRect(window, nullptr, FALSE);
+                InvalidateRect(fat, nullptr, FALSE);
+                InvalidateRect(ntfs, nullptr, FALSE);
                 break;
             }
             return 0;
@@ -994,8 +1123,9 @@ struct Ui {
         case WM_WORK_PATH: {
             std::unique_ptr<std::wstring> path((std::wstring *)b);
             FlushUpdates();
-            sessionFile.reset(CreateFileW((*path + L"\\session.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ,
-                                          nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+            sessionFile.reset(CreateFileW((*path + L"\\session.log").c_str(), GENERIC_WRITE,
+                                          FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+                                          nullptr));
             if (!sessionFile.valid()) {
                 Log(L"无法创建持续日志文件：" + WinError());
                 return 0;
@@ -1009,39 +1139,36 @@ struct Ui {
             return 0;
         }
         case WM_PREVIEW_DIALOG: {
-            bool answer =
-                Ask(window, L"整盘格式化 · 弹窗预览",
-                    L"这是界面预览，不会修改磁盘。正式制作时会删除所选 U 盘的全部分区和文件。",
-                    L"磁盘 3 | Kingston DataTraveler 3.0 | 57.8 GiB\r\n当前 2 "
-                    L"个分区\r\n\r\n文件系统：FAT32\r\n卷标：WIN11_26H2\r\n\r\n安装镜像：\r\nD:\\Windows "
-                    L"ISO\\zh-cn_windows_11_business_editions_version_26h2_x64_dvd_74d48a06."
-                    L"iso\r\n\r\n完成后重建为一个全容量 FAT32 主分区。",
-                    L"确认格式化", L"取消", true);
+            ProductDialog preview;
+            preview.title = L"最后确认：整盘格式化 · 界面预览";
+            preview.heading = L"整盘格式化";
+            preview.message = L"这是界面预览，不会修改磁盘。正式制作会删除所选 U "
+                              L"盘上的全部分区和文件。";
+            preview.details = L"安装系统：Windows 11 教育版 26H2\r\n卷标：WIN11_26H2\r\n\r\n"
+                              L"磁盘 3 | Kingston DataTraveler 3.0 | 57.8 GiB\r\n"
+                              L"当前 2 个分区，包括 EFI、隐藏分区和 PE 分区。\r\n重建为一个全容量 "
+                              L"FAT32 主分区。\r\n\r\n"
+                              L"ISO：D:\\Windows "
+                              L"ISO\\zh-cn_windows_11_business_editions_version_26h2_x64_dvd_"
+                              L"74d48a06.iso";
+            preview.primary = L"确认格式化";
+            preview.secondary = L"取消";
+            preview.format = true;
+            bool answer = ShowProductDialog(window, preview);
             Log(answer ? L"弹窗预览：已选择确认（未执行写盘）。" : L"弹窗预览：已取消（未执行写盘）。");
             return 0;
         }
         case WM_PROMPT_VALUE: {
             std::unique_ptr<std::shared_ptr<PromptMessage>> holder((std::shared_ptr<PromptMessage> *)b);
-            FlushUpdates();
             auto q = *holder;
-            bool fmt = q->kind == Prompt::Format;
-            std::wstring name = fmt                           ? L"整盘格式化"
-                                : q->kind == Prompt::Cleanup  ? L"清理临时 SWM"
-                                : q->kind == Prompt::EjectUsb ? L"安全弹出 U 盘"
-                                : q->kind == Prompt::EjectIso ? L"弹出 Windows ISO"
-                                                              : L"继续制作";
-            std::wstring msg = fmt ? L"确认后将删除这支 U 盘的全部分区和文件。请确认已备份。"
-                                   : L"请核对本步信息，再决定是否执行。";
-            if (fmt && Fs() == L"NTFS")
-                msg += L"\r\nNTFS：部分 UEFI 固件可能不支持直接启动。";
-            q->answer = !cancel && Ask(window, name, msg, q->detail, fmt ? L"确认格式化" : L"执行",
-                                       fmt                           ? L"取消"
-                                       : q->kind == Prompt::Cleanup  ? L"保留文件"
-                                       : q->kind == Prompt::EjectUsb ? L"保持连接"
-                                       : q->kind == Prompt::EjectIso ? L"保留挂载"
-                                                                     : L"取消",
-                                       fmt);
-            SetEvent(q->ready);
+            struct ReplyOnExit {
+                PromptMessage &request;
+                ~ReplyOnExit() { SetEvent(request.ready); }
+            } reply{*q};
+            // Dialog creation failure must release the worker as an unapproved prompt.
+            FlushUpdates();
+            if (!cancel)
+                q->answer = ShowProductDialog(window, WorkflowDialog(q->kind, q->detail, activeRequest));
             return 0;
         }
         case WM_FINISHED: {
@@ -1075,30 +1202,28 @@ struct Ui {
             backend.reset();
             State();
             Scan();
-            if (!r->error.empty())
-                Ask(window, r->copied ? L"安装文件已就绪" : L"本次制作已停止",
-                    r->copied           ? L"安装文件已复制并校验，后续清理或弹出未完成，请查看日志。"
-                    : r->rebuildStarted ? L"目标磁盘可能需要重新制作，请查看日志。"
-                                        : L"本次未开始清盘，请查看日志。",
-                    r->error, L"确定", L"返回");
-            else if (!r->ejectWarning.empty())
-                Ask(window, L"制作完成，U 盘尚未弹出",
-                    L"安装文件已复制并校验。请根据以下原因处理，稍后通过系统安全弹出 U 盘。", r->ejectWarning,
-                    L"确定", L"返回");
+            if (!r->error.empty() || !r->ejectWarning.empty() || r->copied)
+                ShowProductDialog(window, ResultDialog(activeRequest, *r));
             return 0;
         }
         case WM_CLOSE:
             Stop(true);
             return 0;
         case WM_SYSCOMMAND:
+            if ((a & 0xfff0) == 0x1fe0) {
+                if (!busy && !scanning)
+                    ExportDiagnostics();
+                return 0;
+            }
             if ((a & 0xfff0) == 0x1ff0) {
                 std::wstring detail;
-                for (int id : {302, 301}) {
+                for (int id : {302, 301, 303, 304, 305}) {
                     auto b = ResourceBytes(id);
                     detail += Wide(std::string(b.begin(), b.end())) + L"\r\n\r\n";
                 }
                 Ask(window, L"关于 Win11Usb",
-                    L"C++ / Win32 原生验证版 · 无需 .NET、PowerShell 或 WMI。\r\nFAT32 工具的 GPL "
+                    L"C++ / Win32 原生验证版 · 无需 .NET、PowerShell 或 WMI。\r\nFAT32 "
+                    L"工具的 GPL "
                     L"许可证和对应源码会随任务一并保存。",
                     detail, L"确定", L"返回");
                 return 0;
@@ -1136,6 +1261,7 @@ int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promp
                                                                         "SetProcessDpiAwarenessContext");
     if (setDpi)
         setDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    ProductGraphicsSession graphics;
     INITCOMMONCONTROLSEX cc{sizeof cc, ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&cc);
     auto u = new Ui(instance, preview, running, empty);
@@ -1152,17 +1278,17 @@ int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promp
     RegisterClassExW(&wc);
     auto getDpi = (UINT(WINAPI *)())GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForSystem");
     u->dpi = getDpi ? (int)getDpi() : 96;
-    RECT r{0, 0, u->S(826), u->S(760)};
-    AdjustWindowRectEx(&r, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    RECT r{0, 0, u->S(DefaultWidth), u->S(DefaultHeight)};
     RECT wa;
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     int w = std::min(r.right - r.left, wa.right - wa.left),
         h = std::min(r.bottom - r.top, wa.bottom - wa.top);
     HWND window = CreateWindowExW(0, wc.lpszClassName,
 #ifdef WIN11USB_READONLY
-                                  L"Windows 安装 U 盘制作工具 · 原生只读验证版",
+                                  preview ? L"Windows 安装 U 盘制作工具 · 界面预览（只读）"
+                                          : L"Windows 安装 U 盘制作工具 · 原生只读验证版",
 #else
-                                  L"Windows 安装 U 盘制作工具 · C++ 原生验证版",
+                                  L"Windows 安装 U 盘制作工具",
 #endif
                                   MainWindowStyle, (wa.right - w) / 2, (wa.bottom - h) / 2, w, h, nullptr,
                                   nullptr, instance, u);
@@ -1172,6 +1298,8 @@ int RunUi(HINSTANCE instance, bool preview, bool running, bool empty, bool promp
     UpdateWindow(window);
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (DispatchMainKey(window, msg))
+            continue;
         if (!IsDialogMessageW(window, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);

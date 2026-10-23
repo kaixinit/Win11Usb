@@ -1,0 +1,8 @@
+{
+  "self_check_exit": 0,
+  "dependency_report_exit": 0,
+  "actual_ui_capture": "read-only production UI fixture",
+  "capture_width": 826,
+  "capture_height": 753,
+  "physical_disk_writes": 0
+}

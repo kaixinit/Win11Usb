@@ -1,0 +1,1 @@
+{"native":true,"dotnet_required":false,"powershell_required":false,"system_components":[{"name":"gdiplus.dll","present":true,"loadable":true},{"name":"virtdisk.dll","present":true,"loadable":true},{"name":"wimgapi.dll","present":true,"loadable":true},{"name":"dism.exe","present":true},{"name":"format.com","present":true}]}

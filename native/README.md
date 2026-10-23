@@ -1,6 +1,10 @@
 # Win11Usb C++ / Win32 原生迁移验证版
 
-目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.11`。**已收到一次 Kingston FAT32 制作及内容校验通过的实机日志；新版安全弹出与 UEFI 启动仍待验收，不应替换正式下载。**
+目标：沿用现有单窗口操作顺序、蓝白界面、六步进度、日志、整盘确认和制作规则，去除应用运行时的 .NET、WPF、PowerShell、WMI/CIM 依赖。发布的 beta.3 保持不变。当前原生版本为 `0.2.0-preview.13`。**已收到一次 Kingston FAT32 制作及内容校验通过的实机日志；新版安全弹出与 UEFI 启动仍待验收，不应替换正式下载。**
+
+preview.13 按用户要求将默认窗口收紧为 840×760 DIP，保留底部完整操作区并停止随长内容自动增高；补齐首次 NTFS 确认与强制结束提示。生产弹窗规格集中共享，76 项新增规格断言及生产 UI 回归通过。实际只读窗口截图与人工检查中断范围见 [最终界面复核](UI-CHECK-preview13.md)。
+
+preview.12 以 GitHub beta.3 的 XAML、原始矢量图标和交互代码恢复主界面与弹窗：拆分/复制/校验自动继续，恢复明确的清理/弹出按钮和成功结果窗口；保留 C++ 内容校验、句柄释放、防闪烁与安全弹出修复。930 项流程/普通文件 FAT32 断言及生产 UI 测试通过，详见 [界面与操作顺序恢复报告](UI-PARITY-preview12.md)。运行时仍无 .NET、WPF、PowerShell 或 WMI 依赖。
 
 preview.11 修正安全弹出的节点选择与错误提示。只对已核对能力和影响范围的独立存储节点请求弹出；磁盘子节点不支持时，可转向同一支 U 盘内已验证的上层存储节点。区分不支持请求、句柄占用、应用/服务阻止、驱动拒绝和权限不足；失败时保留制作成功结果，使用现有提示样式显示“制作完成，U 盘尚未弹出”。857 项断言和窗口测试通过，preview.10 的防闪烁机制保留。详见 [安全弹出修正报告](USB-EJECT-preview11.md)。
 
@@ -20,12 +24,12 @@ preview.5 的任务目录、DISM scratch、持续日志、SWM 清理和新分区
 
 | 文件 | 用途 |
 | --- | --- |
-| `Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
-| `Win11Usb-NativeReview-v0.2.0-preview.11.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
+| `Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe` | 标准权限运行；选择 ISO 路径、读取 USB 整盘名称、容量、盘符和分区数量。不会挂载 ISO、清盘、格式化或复制。编译时不链接制作后端和命令执行器。 |
+| `Win11Usb-NativeReview-v0.2.0-preview.13.exe` | 管理员验证候选版；已迁移完整制作后端。清盘前再次检查设备并单独确认，默认取消。仅在已备份、明确允许清空的测试 U 盘上验收。 |
 
 两者均使用原生 x64 PE、系统 MSVCRT 和静态 C++ 运行库，没有 CLR 头或托管程序集。无需额外安装 .NET、VC++ Redistributable、PowerShell 或 WebView。单文件指分发时一个 EXE；制作时仍会在本机创建日志、临时 SWM，并提取独立 FAT32 工具和对应源码/许可。
 
-“去除 .NET”不等于可以在删除任意系统组件的 Windows 中制作。只读窗口依赖 Win32 桌面、SetupAPI、存储驱动等基础组件；完整制作还使用 Windows 自带的 `virtdisk.dll`（挂载 ISO）、`wimgapi.dll`（读取映像元数据），大 WIM 拆分使用 `dism.exe`，NTFS 使用 `format.com`。缺少所选流程必需组件时，在清盘前报错。
+“去除 .NET”不等于可以在删除任意系统组件的 Windows 中制作。只读窗口依赖 Win32 桌面、GDI+、SetupAPI、存储驱动等基础组件；完整制作还使用 Windows 自带的 `virtdisk.dll`（挂载 ISO）、`wimgapi.dll`（读取映像元数据），大 WIM 拆分使用 `dism.exe`，NTFS 使用 `format.com`。缺少所选流程必需组件时，在清盘前报错。
 
 ## 原生制作后端
 
@@ -64,12 +68,12 @@ native\out\Win11Usb-NativeTests.exe native\tests\identity-fixtures.tsv work\nati
 ## 只读诊断与界面预览
 
 ```bat
-Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --list-disks disks.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --dependency-report dependencies.json
-Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --preview
-Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --preview-blocked
-Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --preview-running
-Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --preview-dialog
+Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --list-disks disks.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --dependency-report dependencies.json
+Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview
+Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview-blocked
+Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview-running
+Win11Usb-NativeReadOnly-v0.2.0-preview.13.exe --preview-dialog
 ```
 
 `--preview*` 使用明确标注的示例数据，不是制作结果。弹窗预览点击“预览制作状态”打开，不会执行格式化。系统菜单提供“关于 Win11Usb / 许可证”。JSON 诊断不输出设备原始序列号或 PnP 标识。
@@ -78,4 +82,4 @@ Win11Usb-NativeReadOnly-v0.2.0-preview.11.exe --preview-dialog
 
 应用自有 C++ 源码采用仓库 MIT 许可证。FAT32 helper 为独立执行的 GPL 程序，保留原始源码归档、修改后的完整 C 源码、GPL 文本和 [修改说明](third_party/NOTICE.txt)，这些文件也嵌入制作版 EXE 并在使用前保存到本次任务目录。原有第三方归档不作修改。
 
-静态运行库的 LLVM/MinGW/winpthreads 许可完整保留于 [RUNTIME-LICENSES.txt](third_party/RUNTIME-LICENSES.txt)，嵌入两个 EXE，可从“关于”查看。主程序 U 盘图标沿用项目原创图标。当前原生 GDI 绘制的界面图形不依赖 WPF、字体图标包或网络资源。
+静态运行库的 LLVM/MinGW/winpthreads 许可完整保留于 [RUNTIME-LICENSES.txt](third_party/RUNTIME-LICENSES.txt)，嵌入两个 EXE，可从“关于”查看。主程序 U 盘图标沿用项目原创图标。界面恢复使用 beta.3 的 Material Design Icons 原始路径，通过 GDI+ 绘制；相关 Apache 2.0 文本与上游声明内嵌 EXE，可在“关于”查看。运行时不依赖 WPF、字体图标包或网络资源。

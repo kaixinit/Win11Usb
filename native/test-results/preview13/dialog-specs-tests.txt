@@ -1,0 +1,1 @@
+PASS beta.3 production dialog specifications: 76 assertions; no windows displayed or physical disks accessed

@@ -69,9 +69,12 @@ struct Fake final : Backend {
     std::vector<std::wstring> calls;
     bool split = true;
     std::wstring fail;
+    std::function<void(const std::wstring &)> onCall;
     int checks = 0;
     void Call(const wchar_t *s) {
         calls.push_back(s);
+        if (onCall)
+            onCall(s);
         if (fail == s)
             throw Error(L"injected failure");
     }
@@ -80,6 +83,8 @@ struct Fake final : Backend {
         Prepared p;
         p.work = L"TEST";
         p.staging = L"X:\\staging";
+        p.image.display = L"Windows 11 教育版 26H2";
+        p.image.label = L"WIN11_26H2";
         p.plan.split = split;
         p.plan.total = 8 * GiB;
         p.plan.files = {F(L"sources\\install.wim", split ? 8 * GiB : 100)};
@@ -178,30 +183,90 @@ void PlanTests() {
     std::cout << "PASS size boundary, image and SWM preflight\n";
 }
 void WorkflowTests() {
-    for (auto fs : {L"FAT32", L"NTFS"}) {
+    for (auto fs : {L"FAT32", L"NTFS"})
+        for (bool split : {false, true}) {
+            Fake f;
+            f.split = split;
+            std::atomic<bool> s = false;
+            std::vector<int> stages;
+            std::vector<Prompt> prompts;
+            Hooks h;
+            h.ask = [&](Prompt p, const std::wstring &) {
+                Require(
+                    p == Prompt::Format ? !f.Has(L"format") : f.Has(L"verify"),
+                    "destructive confirmation precedes formatting and optional prompts follow verification");
+                prompts.push_back(p);
+                return true;
+            };
+            h.progress = [&](const Progress &p) { stages.push_back(p.stage); };
+            auto r = RunWorkflow(TestRequest(fs), f, h, s);
+            Require(r.copied && r.error.empty(), "successful workflow");
+            Require(f.Has(L"split") == split && f.Has(L"copy") && f.Has(L"verify") &&
+                        f.Has(L"cleanup") == split && f.Has(L"eject-usb") && f.Has(L"eject-iso"),
+                    "all native stages including conditional split on FAT32 and NTFS");
+            std::vector<Prompt> expectedPrompts{Prompt::Format};
+            if (split)
+                expectedPrompts.push_back(Prompt::Cleanup);
+            expectedPrompts.insert(expectedPrompts.end(), {Prompt::EjectUsb, Prompt::EjectIso});
+            Require(prompts == expectedPrompts, "beta.3 prompt order: format then optional cleanup, USB "
+                                                "eject and ISO eject; split/copy auto-continue");
+            std::vector<std::wstring> expectedCalls{L"prepare", L"validate-original", L"validate-original",
+                                                    L"format"};
+            if (split)
+                expectedCalls.insert(expectedCalls.end(), {L"validate-new", L"split"});
+            expectedCalls.insert(expectedCalls.end(), {L"validate-new", L"copy", L"validate-new", L"verify"});
+            if (split)
+                expectedCalls.push_back(L"cleanup");
+            expectedCalls.insert(expectedCalls.end(), {L"eject-usb", L"eject-iso", L"finish"});
+            Require(f.calls == expectedCalls, "automatic split/copy/verify preserves exact backend order, "
+                                              "identity rechecks and final release");
+            Require(stages == std::vector<int>({1, 2, 3, 4, 5, 6, 6}), "six stage order");
+            Require(f.checks == (split ? 5 : 4), "disk rechecks at all applicable stage boundaries");
+            Require(r.imageDisplay == L"Windows 11 教育版 26H2" && r.volumeLabel == L"WIN11_26H2",
+                    "completion dialog receives captured image identity without parsing logs");
+            Require(r.usbResult == L"U 盘已安全弹出，可以拔下。" && r.isoResult == L"已弹出 ISO。",
+                    "completion dialog receives confirmed USB and ISO ejection status");
+        }
+    {
         Fake f;
         std::atomic<bool> s = false;
-        std::vector<int> stages;
+        std::vector<Prompt> prompts;
         Hooks h;
-        h.ask = [](Prompt, const std::wstring &) { return true; };
-        h.progress = [&](const Progress &p) { stages.push_back(p.stage); };
-        auto r = RunWorkflow(TestRequest(fs), f, h, s);
-        Require(r.copied && r.error.empty(), "successful workflow");
-        Require(f.Has(L"split") && f.Has(L"copy") && f.Has(L"verify") && f.Has(L"cleanup") &&
-                    f.Has(L"eject-usb") && f.Has(L"eject-iso"),
-                "all stages including split on NTFS");
-        Require(stages == std::vector<int>({1, 2, 3, 4, 5, 6, 6}), "six stage order");
-        Require(f.checks >= 5, "disk rechecks at stage boundaries");
-    }
-    for (auto prompt : {Prompt::Format, Prompt::Split, Prompt::Copy}) {
-        Fake f;
-        std::atomic<bool> s = false;
-        Hooks h;
-        h.ask = [&](Prompt p, const std::wstring &) { return p != prompt; };
+        h.ask = [&](Prompt p, const std::wstring &) {
+            prompts.push_back(p);
+            return false;
+        };
         auto r = RunWorkflow(TestRequest(), f, h, s);
-        Require(r.cancelled && f.Has(L"abort") && !f.Has(L"copy"), "prompt cancellation halts before copy");
-        if (prompt == Prompt::Format)
-            Require(!f.Has(L"format") && !r.rebuildStarted, "cancel format never calls destructive backend");
+        Require(r.cancelled && f.Has(L"abort") && !f.Has(L"copy"), "format cancellation halts workflow");
+        Require(!f.Has(L"format") && !r.rebuildStarted, "cancel format never calls destructive backend");
+        Require(prompts == std::vector<Prompt>{Prompt::Format}, "cancel format shows no later prompts");
+    }
+    for (auto skip : {Prompt::Cleanup, Prompt::EjectUsb, Prompt::EjectIso, Prompt::Split}) {
+        Fake f;
+        std::atomic<bool> stop = false;
+        std::vector<Prompt> prompts;
+        Hooks h;
+        h.ask = [&](Prompt p, const std::wstring &) {
+            prompts.push_back(p);
+            // Split is never asked; use it as the case that declines all optional actions.
+            return p == Prompt::Format || (skip != Prompt::Split && p != skip);
+        };
+        auto result = RunWorkflow(TestRequest(), f, h, stop);
+        Require(result.copied && !result.cancelled && result.error.empty(),
+                "declining optional cleanup or eject does not cancel verified creation");
+        Require(prompts == std::vector<Prompt>(
+                               {Prompt::Format, Prompt::Cleanup, Prompt::EjectUsb, Prompt::EjectIso}),
+                "optional skip retains beta.3 remaining prompt order");
+        Require(f.Has(L"cleanup") == (skip != Prompt::Cleanup && skip != Prompt::Split) &&
+                    f.Has(L"eject-usb") == (skip != Prompt::EjectUsb && skip != Prompt::Split) &&
+                    f.Has(L"eject-iso") == (skip != Prompt::EjectIso && skip != Prompt::Split),
+                "optional actions execute only when confirmed");
+        Require((result.usbResult == L"U 盘保持连接，请稍后通过系统安全弹出。") ==
+                    (skip == Prompt::EjectUsb || skip == Prompt::Split),
+                "declined USB ejection accurately reports connected status");
+        Require((result.isoResult == L"ISO 保留挂载。") ==
+                    (skip == Prompt::EjectIso || skip == Prompt::Split),
+                "declined ISO ejection accurately reports kept mount");
     }
     for (auto failure :
          {L"prepare", L"validate-original", L"format", L"validate-new", L"split", L"copy", L"verify"}) {
@@ -226,6 +291,10 @@ void WorkflowTests() {
         Require(r.copied && r.error.empty(), "post-verify warning preserves successful copy");
         Require(r.ejectWarning.empty() == (f.fail != L"eject-usb"),
                 "USB eject failure is carried separately to completion UI without changing copy result");
+        Require((r.usbResult == L"U 盘尚未安全弹出：injected failure") == (f.fail == L"eject-usb"),
+                "failed USB ejection never claims that removal is safe");
+        Require((r.isoResult == L"ISO 弹出未确认：injected failure") == (f.fail == L"eject-iso"),
+                "failed ISO ejection reports unconfirmed state rather than success");
     }
     {
         Fake f;
@@ -241,6 +310,36 @@ void WorkflowTests() {
         std::atomic<bool> s = true;
         auto r = RunWorkflow(TestRequest(), f, {}, s);
         Require(r.cancelled && !f.Has(L"prepare") && !f.Has(L"format"), "early cancel has no disk calls");
+    }
+    for (int cancelledStage : {3, 4, 5}) {
+        Fake f;
+        std::atomic<bool> stop = false;
+        Hooks h;
+        h.ask = [](Prompt, const std::wstring &) { return true; };
+        h.progress = [&](const Progress &p) {
+            if (p.stage == cancelledStage)
+                stop = true;
+        };
+        auto result = RunWorkflow(TestRequest(), f, h, stop);
+        const wchar_t *blocked = cancelledStage == 3 ? L"split" : cancelledStage == 4 ? L"copy" : L"verify";
+        Require(result.cancelled && !result.copied && !f.Has(blocked) && f.Has(L"abort") &&
+                    !f.Has(L"eject-usb"),
+                "automatic stages remain cancellable before invoking split, copy or verification");
+    }
+    for (int cancelledCheck : {1, 2, 3}) {
+        Fake f;
+        std::atomic<bool> stop = false;
+        int checks = 0;
+        f.onCall = [&](const std::wstring &call) {
+            if (call == L"validate-new" && ++checks == cancelledCheck)
+                stop = true;
+        };
+        Hooks h;
+        h.ask = [](Prompt, const std::wstring &) { return true; };
+        auto result = RunWorkflow(TestRequest(), f, h, stop);
+        const wchar_t *blocked = cancelledCheck == 1 ? L"split" : cancelledCheck == 2 ? L"copy" : L"verify";
+        Require(result.cancelled && !f.Has(blocked) && f.Has(L"abort"),
+                "stop arriving during identity recheck is honored before automatic backend work");
     }
     {
         Fake f;
@@ -1455,13 +1554,23 @@ void FileWorkflowTests(const std::wstring &root, const std::wstring &fixture) {
             request.iso = L"windows_11_26h2.iso";
             FileWorkflow backend(base, source, split);
             std::atomic<bool> stop = false;
+            std::vector<Prompt> prompts;
             Hooks h;
-            h.ask = [](Prompt, const std::wstring &) { return true; };
+            h.ask = [&](Prompt prompt, const std::wstring &) {
+                prompts.push_back(prompt);
+                return true;
+            };
             auto result = RunWorkflow(request, backend, h, stop);
             if (!result.error.empty())
                 std::cerr << "File integration error: " << Utf8(result.error) << '\n';
             Require(result.copied && result.error.empty() && backend.ejected,
                     "six-stage file integration completes with shared production path functions");
+            std::vector<Prompt> expectedPrompts{Prompt::Format};
+            if (split)
+                expectedPrompts.push_back(Prompt::Cleanup);
+            expectedPrompts.insert(expectedPrompts.end(), {Prompt::EjectUsb, Prompt::EjectIso});
+            Require(prompts == expectedPrompts,
+                    "actual split/copy/content-verify file pipeline retains beta.3 interaction order");
             Require(FileExists(backend.output + L"sources\\install.wim") != split &&
                         FileExists(backend.output + L"sources\\install.swm") == split,
                     "shared production copy set replaces WIM only for split branch on FAT32 and NTFS");

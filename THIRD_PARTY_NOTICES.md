@@ -25,7 +25,7 @@
 
 主界面使用 [Material Design Icons / Pictogrammers](https://github.com/Templarian/MaterialDesign-SVG) 的 13 个开源图标，保留上游 Apache 2.0 条款及声明，不改标为本项目 MIT。
 
-原始 SVG 保存在 assets/ui-icons；固定提交、文件来源及 SHA-256 记录在 third_party/material-design-icons/SOURCES.json。许可原文和上游说明随源码与运行包提供。图形路径转换为 WPF Geometry 并内嵌在单 EXE 中，应用统一着色、缩放；U 盘图标使用显示旋转。运行时不加载字体图标或下载资源。
+原始 SVG 保存在 assets/ui-icons；固定提交、文件来源及 SHA-256 记录在 third_party/material-design-icons/SOURCES.json。许可原文和上游说明随源码与运行包提供。beta.3 图形路径转换为 WPF Geometry；原生版将同一 Geometry 转为 GDI+ 路径，两者均内嵌在单 EXE 中，应用统一着色、缩放；U 盘图标使用显示旋转。运行时不加载字体图标或下载资源。
 
 ## Windows 组件
 

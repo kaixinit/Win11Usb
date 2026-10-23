@@ -1,0 +1,3 @@
+Scan starting...
+Scan finished.
+Scanning <workspace>\dist\Win11Usb-NativeReview-v0.2.0-preview.12.exe found no threats.

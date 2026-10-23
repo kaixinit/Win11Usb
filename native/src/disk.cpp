@@ -514,7 +514,7 @@ Disk RecheckDisk(const Disk &expected, bool layout) {
 std::wstring DiskJson(const Catalog &c) {
     std::wstring s = L"{\"implementation\":\"C++/"
                      L"Win32\",\"read_only\":true,\"dotnet_required\":false,\"powershell_required\":false,"
-                     L"\"application_version\":\"0.2.0-preview.11\",\"administrator\":" +
+                     L"\"application_version\":\"0.2.0-preview.13\",\"administrator\":" +
                      std::wstring(IsAdmin() ? L"true" : L"false") + L",\"interface_count\":" +
                      std::to_wstring(c.interfaces) + L",\"non_usb_count\":" + std::to_wstring(c.nonUsb) +
                      L",\"failed_interface_count\":" + std::to_wstring(c.failed) +
